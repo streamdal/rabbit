@@ -17,6 +17,9 @@ RabbitMQ and are both publishers and consumers.
 We wrote this lib to ensure that all of our services make use of Rabbit in a
 consistent, predictable way AND are able to survive network blips.
 
+**NOTE**: This library works only with non-default exchanges. If you need support
+for default exchange - open a PR!
+
 # Usage
 ```go
 package main

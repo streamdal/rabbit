@@ -25,7 +25,6 @@ type IRabbit interface {
 
 type Rabbit struct {
 	Conn                    *amqp.Connection
-	ConsumerServerChannel   *amqp.Channel
 	ConsumerDeliveryChannel <-chan amqp.Delivery
 	ConsumerRWMutex         *sync.RWMutex
 	NotifyCloseChan         chan *amqp.Error
@@ -83,7 +82,7 @@ func New(opts *Options) (*Rabbit, error) {
 		log:    logrus.WithField("pkg", "rabbit"),
 	}
 
-	if err := r.newConsumerChannels(); err != nil {
+	if err := r.newConsumerChannel(); err != nil {
 		return nil, errors.Wrap(err, "unable to get initial delivery channel")
 	}
 
@@ -96,6 +95,10 @@ func New(opts *Options) (*Rabbit, error) {
 }
 
 func validateOptions(opts *Options) error {
+	if opts == nil {
+		return errors.New("Options cannot be nil")
+	}
+
 	if opts.URL == "" {
 		return errors.New("URL cannot be empty")
 	}
@@ -126,7 +129,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 	var quit bool
 
 	r.Looper.Loop(func() error {
-		// This is needed in case .Quit() wasn't picked up quickly enough
+		// This is needed in case .Quit() wasn't picked up quickly enough by director
 		if quit {
 			time.Sleep(100 * time.Millisecond)
 			return nil
@@ -138,6 +141,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 				r.log.Debugf("error during consume: %s", err)
 
 				if errChan != nil {
+					// Write in a goroutine in case error channel is not consumed fast enough
 					go func() {
 						errChan <- &ConsumeError{
 							Message: &msg,
@@ -169,7 +173,7 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 			return err
 		}
 	case <-ctx.Done():
-		r.log.Warning("received notice to quit")
+		r.log.Warning("stopped via context")
 		return nil
 	case <-r.ctx.Done():
 		r.log.Warning("stopped via Stop()")
@@ -207,6 +211,7 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	return nil
 }
 
+// Stop stops an in-progress Consume(...) or ConsumeOnce(...)
 func (r *Rabbit) Stop() error {
 	r.cancel()
 
@@ -243,7 +248,7 @@ func (r *Rabbit) watchNotifyClose() {
 		r.Conn.NotifyClose(r.NotifyCloseChan)
 
 		// Update channel
-		if err := r.newConsumerChannels(); err != nil {
+		if err := r.newConsumerChannel(); err != nil {
 			logrus.Errorf("unable to set new channel: %s", err)
 
 			// TODO: This is super shitty. Should address this.
@@ -307,7 +312,7 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	return ch, nil
 }
 
-func (r *Rabbit) newConsumerChannels() error {
+func (r *Rabbit) newConsumerChannel() error {
 	serverChannel, err := r.newServerChannel()
 	if err != nil {
 		return errors.Wrap(err, "unable to create new server channel")
@@ -326,7 +331,6 @@ func (r *Rabbit) newConsumerChannels() error {
 		return errors.Wrap(err, "unable to create delivery channel")
 	}
 
-	r.ConsumerServerChannel = serverChannel
 	r.ConsumerDeliveryChannel = deliveryChannel
 
 	return nil
