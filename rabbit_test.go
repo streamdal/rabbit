@@ -529,7 +529,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Give our consumer some time to receive the message
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(1 * time.Second)
 
 				Expect(receivedMessage).To(Equal(testMessage))
 			})

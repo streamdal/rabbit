@@ -1,7 +1,9 @@
 // Package rabbit is a simple streadway/amqp wrapper library that comes with:
 //
 // * Auto-reconnect support
+//
 // * Context support
+//
 // * Helpers for consuming once or forever and publishing
 //
 // The library is used internally at https://batch.sh where it powers most of
