@@ -1,5 +1,7 @@
 rabbit
 ======
+[![](https://godoc.org/github.com/batchcorp/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/batchcorp/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/batchcorp/rabbit)](https://goreportcard.com/report/github.com/batchcorp/rabbit)
+
 
 A RabbitMQ wrapper lib around [streadway/amqp](https://github.com/streadway/amqp) 
 with some bells and whistles.
@@ -33,7 +35,12 @@ import (
 
 func main() { 
     r, err := rabbit.New(&rabbit.Options{
-        // instantiate
+        &Options{
+        	URL:          "amqp://localhost",
+        	QueueName:    "my-queue",
+        	ExchangeName: "messages",
+        	RoutingKey:   "messages",
+        }
     })
     if err != nil {
         log.Fatalf("unable to instantiate rabbit: %s", err)
@@ -48,7 +55,7 @@ func main() {
     }
 
     // Consume once
-    if err := r.ConsumeOnce(ctx, func() amqp.Delivery) {
+    if err := r.ConsumeOnce(nil, func() amqp.Delivery) {
         fmt.Printf("Received new message: %+v\n", msg)
     }); err != nil {
         log.Fatalf("unable to consume once: %s", err),
@@ -57,7 +64,9 @@ func main() {
     var numReceived int
 
     // Consume forever (blocks)
-    if err := r.Consume(ctx, func(msg amqp.Delivery) {
+    ctx, cancel := context.WithCancel(context.Background())
+
+    r.Consume(ctx, func(msg amqp.Delivery) {
         fmt.Printf("Received new message: %+v\n", msg)
         
         numReceived++
@@ -65,10 +74,10 @@ func main() {
         if numReceived > 1 {
             r.Stop()
         }
-    }); err != nil {
-        log.Fatalf("ran into error during consume: %s", err)
-    }
-    
-    fmt.Println("Finished")
+    })
+
+    // Or stop via ctx 
+    r.Consume(..)    
+    cancel()
 }
 ```
