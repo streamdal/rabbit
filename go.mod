@@ -8,6 +8,8 @@ require (
 	github.com/onsi/gomega v1.10.2
 	github.com/pkg/errors v0.9.1
 	github.com/relistan/go-director v0.0.0-20200406104025-dbbf5d95248d
+	github.com/satori/go.uuid v1.2.0
 	github.com/sirupsen/logrus v1.7.0
+	github.com/smartystreets/assertions v0.0.0-20180927180507-b2de0cb4f26d
 	github.com/streadway/amqp v1.0.0
 )

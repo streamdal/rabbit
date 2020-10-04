@@ -39,17 +39,42 @@ type Rabbit struct {
 }
 
 type Options struct {
-	URL               string
-	QueueName         string
-	ExchangeName      string
-	ExchangeType      string
-	RoutingKey        string
-	QosPrefetchCount  int
-	QosPrefetchSize   int
+	// Required; format "amqp://user:pass@host:port"
+	URL string
+
+	// If left empty, server will auto generate queue name
+	QueueName string
+
+	// Required
+	ExchangeName string
+
+	// Whether to declare/create exchange on connect
+	ExchangeDeclare bool
+
+	// Required if declaring queue (valid: direct, fanout, topic, headers)
+	ExchangeType string
+	RoutingKey   string
+
+	// https://godoc.org/github.com/streadway/amqp#Channel.Qos
+	// Leave unset if no QoS preferences
+	QosPrefetchCount int
+	QosPrefetchSize  int
+
+	// How long to wait before we retry connecting to a server (after disconnect)
 	RetryReconnectSec int
-	QueueDurable      bool
-	QueueExclusive    bool
-	QueueAutoDelete   bool
+
+	// Whether queue should survive/persist server restarts (and there are no remaining bindings)
+	QueueDurable bool
+
+	// Whether consumer should be the sole consumer of the queue; used only if
+	// QueueDeclare set to true
+	QueueExclusive bool
+
+	// Whether to delete queue on consumer disconnect; used only if QueueDeclare set to true
+	QueueAutoDelete bool
+
+	// Whether to declare/create queue on connect; used only if QueueDeclare set to true
+	QueueDeclare bool
 }
 
 type ConsumeError struct {
@@ -58,7 +83,7 @@ type ConsumeError struct {
 }
 
 func New(opts *Options) (*Rabbit, error) {
-	if err := validateOptions(opts); err != nil {
+	if err := ValidateOptions(opts); err != nil {
 		return nil, errors.Wrap(err, "invalid options")
 	}
 
@@ -94,7 +119,7 @@ func New(opts *Options) (*Rabbit, error) {
 	return r, nil
 }
 
-func validateOptions(opts *Options) error {
+func ValidateOptions(opts *Options) error {
 	if opts == nil {
 		return errors.New("Options cannot be nil")
 	}
@@ -103,8 +128,10 @@ func validateOptions(opts *Options) error {
 		return errors.New("URL cannot be empty")
 	}
 
-	if opts.ExchangeType == "" {
-		return errors.New("ExchangeType cannot be empty")
+	if opts.ExchangeDeclare {
+		if opts.ExchangeType == "" {
+			return errors.New("ExchangeType cannot be empty if ExchangeDeclare set to true")
+		}
 	}
 
 	if opts.ExchangeName == "" {
@@ -124,6 +151,10 @@ func validateOptions(opts *Options) error {
 
 // Consume message from queue and run given func forever (until you call Stop())
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	r.log.Debug("waiting for messages from rabbit ...")
 
 	var quit bool
@@ -158,6 +189,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 			r.Looper.Quit()
 			quit = true
 		}
+
 		return nil
 	})
 
@@ -165,6 +197,10 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 }
 
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	r.log.Debug("waiting for a single message from rabbit ...")
 
 	select {
@@ -185,7 +221,12 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 	return nil
 }
 
+// TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	// Is this the first time we're publishing?
 	if r.ProducerServerChannel == nil {
 		ch, err := r.newServerChannel()
@@ -219,6 +260,7 @@ func (r *Rabbit) Stop() error {
 }
 
 func (r *Rabbit) watchNotifyClose() {
+	// TODO: Use a looper here
 	for {
 		closeErr := <-r.NotifyCloseChan
 
@@ -276,27 +318,31 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		return nil, errors.Wrap(err, "unable to set qos policy")
 	}
 
-	if err := ch.ExchangeDeclare(
-		r.Options.ExchangeName,
-		r.Options.ExchangeType,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	); err != nil {
-		return nil, errors.Wrap(err, "unable to declare exchange")
+	if r.Options.ExchangeDeclare {
+		if err := ch.ExchangeDeclare(
+			r.Options.ExchangeName,
+			r.Options.ExchangeType,
+			true,
+			false,
+			false,
+			false,
+			nil,
+		); err != nil {
+			return nil, errors.Wrap(err, "unable to declare exchange")
+		}
 	}
 
-	if _, err := ch.QueueDeclare(
-		r.Options.QueueName,
-		r.Options.QueueDurable,
-		r.Options.QueueAutoDelete,
-		r.Options.QueueExclusive,
-		false,
-		nil,
-	); err != nil {
-		return nil, err
+	if r.Options.QueueDeclare {
+		if _, err := ch.QueueDeclare(
+			r.Options.QueueName,
+			r.Options.QueueDurable,
+			r.Options.QueueAutoDelete,
+			r.Options.QueueExclusive,
+			false,
+			nil,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := ch.QueueBind(
