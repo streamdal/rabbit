@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,3 +19,7 @@ jobs:
       - name: Master buld tests
         run: |
           go test ./...
+      - name: Bump version and push tag
+        uses: mathieudutour/github-tag-action@v4.5
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
