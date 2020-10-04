@@ -5,13 +5,13 @@ package rabbit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
+	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 )
 
@@ -517,7 +517,6 @@ var _ = Describe("Rabbit", func() {
 				var receivedMessage []byte
 
 				go func() {
-					defer GinkgoRecover()
 					var err error
 					receivedMessage, err = receiveMessage(ch, opts)
 
@@ -537,14 +536,42 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("producer server channel is nil", func() {
-			It("will generate a new server channel", func() {
+			BeforeEach(func() {
+				var err error
 
+				opts = generateOptions()
+
+				r, err = New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(r).ToNot(BeNil())
+
+				ch, err = connect(opts)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ch).ToNot(BeNil())
 			})
-		})
 
-		When("a reconnect occurs", func() {
-			It("Publish still works", func() {
+			It("will generate a new server channel", func() {
+				r.ProducerServerChannel = nil
 
+				var receivedMessage []byte
+
+				go func() {
+					var err error
+					receivedMessage, err = receiveMessage(ch, opts)
+
+					Expect(err).ToNot(HaveOccurred())
+				}()
+
+				testMessage := []byte(uuid.NewV4().String())
+				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
+
+				Expect(publishErr).ToNot(HaveOccurred())
+
+				// Give our consumer some time to receive the message
+				time.Sleep(25 * time.Millisecond)
+
+				Expect(receivedMessage).To(Equal(testMessage))
 			})
 		})
 	})
@@ -751,9 +778,10 @@ func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
 
 	select {
 	case m := <-deliveryChan:
-		fmt.Println("Received something!")
+		logrus.Debug("Test: received message in receiveMessage()")
 		return m.Body, nil
 	case <-time.After(5 * time.Second):
+		logrus.Debug("Test: timed out waiting for message in receiveMessage()")
 		return nil, errors.New("timed out")
 	}
 }
