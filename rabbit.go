@@ -97,7 +97,7 @@ func New(opts *Options) (*Rabbit, error) {
 
 	ac, err := amqp.Dial(opts.URL)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "unable to dial server")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

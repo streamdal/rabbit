@@ -42,7 +42,7 @@ var _ = Describe("Rabbit", func() {
 				r, err := New(opts)
 
 				Expect(err).ToNot(BeNil())
-				Expect(err.Error()).To(ContainSubstring("no such host"))
+				Expect(err.Error()).To(ContainSubstring("unable to dial server"))
 				Expect(r).To(BeNil())
 			})
 
@@ -529,7 +529,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Give our consumer some time to receive the message
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				Expect(receivedMessage).To(Equal(testMessage))
 			})
