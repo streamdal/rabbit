@@ -60,7 +60,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(r.ConsumerRWMutex).ToNot(BeNil())
 				Expect(r.NotifyCloseChan).ToNot(BeNil())
 				Expect(r.ProducerRWMutex).ToNot(BeNil())
-				Expect(r.Looper).ToNot(BeNil())
+				Expect(r.ConsumeLooper).ToNot(BeNil())
 				Expect(r.Options).ToNot(BeNil())
 			})
 
@@ -169,12 +169,16 @@ var _ = Describe("Rabbit", func() {
 				ctx, cancel := context.WithCancel(context.Background())
 				receivedMessages := make([]amqp.Delivery, 0)
 
+				var exit bool
+
 				// Launch consumer
 				go func() {
 					r.Consume(ctx, errChan, func(msg amqp.Delivery) error {
 						receivedMessages = append(receivedMessages, msg)
 						return nil
 					})
+
+					exit = true
 				}()
 
 				messages := generateRandomStrings(20)
@@ -196,6 +200,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr2).ToNot(HaveOccurred())
 
 				Expect(len(receivedMessages)).To(Equal(10))
+				Expect(exit).To(BeTrue())
 			})
 		})
 
@@ -497,7 +502,6 @@ var _ = Describe("Rabbit", func() {
 				var err error
 
 				opts = generateOptions()
-				opts.QueueName = "publish-test"
 
 				r, err = New(opts)
 
@@ -509,12 +513,11 @@ var _ = Describe("Rabbit", func() {
 				Expect(ch).ToNot(BeNil())
 			})
 
-			FIt("correctly publishes message", func() {
+			It("correctly publishes message", func() {
 				var receivedMessage []byte
 
 				go func() {
 					defer GinkgoRecover()
-
 					var err error
 					receivedMessage, err = receiveMessage(ch, opts)
 
@@ -529,8 +532,7 @@ var _ = Describe("Rabbit", func() {
 				// Give our consumer some time to receive the message
 				time.Sleep(25 * time.Millisecond)
 
-				fmt.Println(receivedMessage)
-				//Expect(receivedMessage).To(Equal(testMessage))
+				Expect(receivedMessage).To(Equal(testMessage))
 			})
 		})
 
@@ -570,7 +572,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(ch).ToNot(BeNil())
 			})
 
-			It("Stop should release Consume() from blocking", func() {
+			It("Stop() should release Consume() and return", func() {
 				var receivedMessage string
 				var exit bool
 
@@ -589,10 +591,12 @@ var _ = Describe("Rabbit", func() {
 				// Stop the consumer
 				stopErr := r.Stop()
 
+				time.Sleep(100 * time.Millisecond)
+
 				// Verify that stop did not error and the goroutine exited
 				Expect(stopErr).ToNot(HaveOccurred())
-				Expect(exit).To(BeTrue())
 				Expect(receivedMessage).To(BeEmpty()) // jic
+				Expect(exit).To(BeTrue())
 			})
 		})
 	})
@@ -664,20 +668,24 @@ var _ = Describe("Rabbit", func() {
 })
 
 func generateOptions() *Options {
+	exchangeName := "rabbit-" + uuid.NewV4().String()
+
 	return &Options{
-		URL:               "amqp://localhost",
-		QueueName:         "rabbit-" + uuid.NewV4().String(),
-		ExchangeName:      "rabbit-" + uuid.NewV4().String(),
-		ExchangeType:      "topic",
-		ExchangeDeclare:   true,
-		RoutingKey:        "messages",
-		QosPrefetchCount:  0,
-		QosPrefetchSize:   0,
-		RetryReconnectSec: 10,
-		QueueDurable:      false,
-		QueueExclusive:    false,
-		QueueAutoDelete:   true,
-		QueueDeclare:      true,
+		URL:                "amqp://localhost",
+		QueueName:          "rabbit-" + uuid.NewV4().String(),
+		ExchangeName:       exchangeName,
+		ExchangeType:       "topic",
+		ExchangeDeclare:    true,
+		ExchangeDurable:    false,
+		ExchangeAutoDelete: true,
+		RoutingKey:         exchangeName,
+		QosPrefetchCount:   0,
+		QosPrefetchSize:    0,
+		RetryReconnectSec:  10,
+		QueueDeclare:       true,
+		QueueDurable:       false,
+		QueueExclusive:     false,
+		QueueAutoDelete:    true,
 	}
 }
 
@@ -719,10 +727,12 @@ func publishMessages(ch *amqp.Channel, opts *Options, messages []string) error {
 }
 
 func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
+	tmpQueueName := "rabbit-receiveMessages-" + uuid.NewV4().String()
+
 	if _, err := ch.QueueDeclare(
-		opts.QueueName,
+		tmpQueueName,
 		false,
-		false,
+		true,
 		false,
 		false,
 		nil,
@@ -730,11 +740,11 @@ func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
 		return nil, errors.Wrap(err, "unable to declare queue")
 	}
 
-	if err := ch.QueueBind(opts.QueueName, opts.RoutingKey, opts.ExchangeName, false, nil); err != nil {
+	if err := ch.QueueBind(tmpQueueName, opts.RoutingKey, opts.ExchangeName, false, nil); err != nil {
 		return nil, errors.Wrap(err, "unable to bind queue")
 	}
 
-	deliveryChan, err := ch.Consume(opts.QueueName, "", false, false, false, false, nil)
+	deliveryChan, err := ch.Consume(tmpQueueName, "", true, false, false, false, nil)
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create delivery channel")
 	}

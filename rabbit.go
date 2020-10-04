@@ -30,7 +30,7 @@ type Rabbit struct {
 	NotifyCloseChan         chan *amqp.Error
 	ProducerServerChannel   *amqp.Channel
 	ProducerRWMutex         *sync.RWMutex
-	Looper                  director.Looper
+	ConsumeLooper           director.Looper
 	Options                 *Options
 
 	ctx    context.Context
@@ -53,7 +53,15 @@ type Options struct {
 
 	// Required if declaring queue (valid: direct, fanout, topic, headers)
 	ExchangeType string
-	RoutingKey   string
+
+	// Whether exchange should survive/persist server restarts
+	ExchangeDurable bool
+
+	// Whether to delete exchange when its no longer used; used only if ExchangeDeclare set to true
+	ExchangeAutoDelete bool
+
+	// Used as either routing (publish) or binding key (consume)
+	RoutingKey string
 
 	// https://godoc.org/github.com/streadway/amqp#Channel.Qos
 	// Leave unset if no QoS preferences
@@ -99,7 +107,7 @@ func New(opts *Options) (*Rabbit, error) {
 		ConsumerRWMutex: &sync.RWMutex{},
 		NotifyCloseChan: make(chan *amqp.Error),
 		ProducerRWMutex: &sync.RWMutex{},
-		Looper:          director.NewFreeLooper(director.FOREVER, make(chan error)),
+		ConsumeLooper:   director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
 		Options:         opts,
 
 		ctx:    ctx,
@@ -159,10 +167,11 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 	var quit bool
 
-	r.Looper.Loop(func() error {
-		// This is needed in case .Quit() wasn't picked up quickly enough by director
+	r.ConsumeLooper.Loop(func() error {
+		// This is needed to prevent context flood in case .Quit() wasn't picked
+		// up quickly enough by director
 		if quit {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(25 * time.Millisecond)
 			return nil
 		}
 
@@ -183,17 +192,18 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 			}
 		case <-ctx.Done():
 			r.log.Warning("stopped via context")
-			r.Looper.Quit()
+			r.ConsumeLooper.Quit()
+			quit = true
 		case <-r.ctx.Done():
 			r.log.Warning("stopped via Stop()")
-			r.Looper.Quit()
+			r.ConsumeLooper.Quit()
 			quit = true
 		}
 
 		return nil
 	})
 
-	r.log.Debug("Consume exiting")
+	r.log.Debug("Consume finished - exiting")
 }
 
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
@@ -322,8 +332,8 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		if err := ch.ExchangeDeclare(
 			r.Options.ExchangeName,
 			r.Options.ExchangeType,
-			true,
-			false,
+			r.Options.ExchangeDurable,
+			r.Options.ExchangeAutoDelete,
 			false,
 			false,
 			nil,

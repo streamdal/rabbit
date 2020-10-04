@@ -10,7 +10,7 @@ import (
 
 func TestRabbitSuite(t *testing.T) {
 	// reduce the noise when testing
-	logrus.SetLevel(logrus.FatalLevel)
+	logrus.SetLevel(logrus.DebugLevel)
 
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Rabbit Suite")
