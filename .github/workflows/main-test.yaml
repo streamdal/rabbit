@@ -1,14 +1,14 @@
-name: master
+name: main
 
 on:
   push:
     branches:
-      - master
+      - main
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@master
+      - uses: actions/checkout@main
       - name: Start up dependencies
         run: docker-compose up -d
       - name: Wait for dependencies to start up
