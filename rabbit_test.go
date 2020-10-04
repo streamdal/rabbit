@@ -5,6 +5,7 @@ package rabbit
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo"
@@ -434,15 +435,166 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("run func gets an error", func() {
+			BeforeEach(func() {
+				var err error
+
+				opts = generateOptions()
+
+				r, err = New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(r).ToNot(BeNil())
+
+				ch, err = connect(opts)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ch).ToNot(BeNil())
+			})
+
 			It("will return the error to the user", func() {
+				var consumeErr error
+				var exit bool
+
+				go func() {
+					consumeErr = r.ConsumeOnce(nil, func(msg amqp.Delivery) error {
+						return errors.New("something broke")
+					})
+
+					exit = true
+				}()
+
+				// Wait a moment for consumer to connect
+				time.Sleep(25 * time.Millisecond)
+
+				// Generate and send a message
+				messages := generateRandomStrings(1)
+				publishErr := publishMessages(ch, opts, messages)
+
+				Expect(publishErr).ToNot(HaveOccurred())
+
+				// Wait a moment for consumer to receive the message
+				time.Sleep(25 * time.Millisecond)
+
+				// Goroutine should've exited
+				Expect(exit).To(BeTrue())
+
+				// Consumer should've returned correct error
+				Expect(consumeErr).To(HaveOccurred())
+				Expect(consumeErr.Error()).To(ContainSubstring("something broke"))
+
 			})
 		})
 	})
 
 	Describe("Publish", func() {
+		var (
+			opts *Options
+			r    *Rabbit
+			ch   *amqp.Channel
+		)
+
+		Context("happy path", func() {
+			BeforeEach(func() {
+				var err error
+
+				opts = generateOptions()
+				opts.QueueName = "publish-test"
+
+				r, err = New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(r).ToNot(BeNil())
+
+				ch, err = connect(opts)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ch).ToNot(BeNil())
+			})
+
+			FIt("correctly publishes message", func() {
+				var receivedMessage []byte
+
+				go func() {
+					defer GinkgoRecover()
+
+					var err error
+					receivedMessage, err = receiveMessage(ch, opts)
+
+					Expect(err).ToNot(HaveOccurred())
+				}()
+
+				testMessage := []byte(uuid.NewV4().String())
+				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
+
+				Expect(publishErr).ToNot(HaveOccurred())
+
+				// Give our consumer some time to receive the message
+				time.Sleep(25 * time.Millisecond)
+
+				fmt.Println(receivedMessage)
+				//Expect(receivedMessage).To(Equal(testMessage))
+			})
+		})
+
+		When("producer server channel is nil", func() {
+			It("will generate a new server channel", func() {
+
+			})
+		})
+
+		When("a reconnect occurs", func() {
+			It("Publish still works", func() {
+
+			})
+		})
 	})
 
 	Describe("Stop", func() {
+		var (
+			opts *Options
+			r    *Rabbit
+			ch   *amqp.Channel
+		)
+
+		When("consuming messages via Consume()", func() {
+			BeforeEach(func() {
+				var err error
+
+				opts = generateOptions()
+
+				r, err = New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(r).ToNot(BeNil())
+
+				ch, err = connect(opts)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ch).ToNot(BeNil())
+			})
+
+			It("Stop should release Consume() from blocking", func() {
+				var receivedMessage string
+				var exit bool
+
+				go func() {
+					r.Consume(nil, nil, func(msg amqp.Delivery) error {
+						receivedMessage = string(msg.Body)
+						return nil
+					})
+
+					exit = true
+				}()
+
+				// Wait a moment for consumer to start
+				time.Sleep(25 * time.Millisecond)
+
+				// Stop the consumer
+				stopErr := r.Stop()
+
+				// Verify that stop did not error and the goroutine exited
+				Expect(stopErr).ToNot(HaveOccurred())
+				Expect(exit).To(BeTrue())
+				Expect(receivedMessage).To(BeEmpty()) // jic
+			})
+		})
 	})
 
 	Describe("validateOptions", func() {
@@ -564,4 +716,34 @@ func publishMessages(ch *amqp.Channel, opts *Options, messages []string) error {
 	}
 
 	return nil
+}
+
+func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
+	if _, err := ch.QueueDeclare(
+		opts.QueueName,
+		false,
+		false,
+		false,
+		false,
+		nil,
+	); err != nil {
+		return nil, errors.Wrap(err, "unable to declare queue")
+	}
+
+	if err := ch.QueueBind(opts.QueueName, opts.RoutingKey, opts.ExchangeName, false, nil); err != nil {
+		return nil, errors.Wrap(err, "unable to bind queue")
+	}
+
+	deliveryChan, err := ch.Consume(opts.QueueName, "", false, false, false, false, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create delivery channel")
+	}
+
+	select {
+	case m := <-deliveryChan:
+		fmt.Println("Received something!")
+		return m.Body, nil
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("timed out")
+	}
 }
