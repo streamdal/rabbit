@@ -87,7 +87,7 @@ var _ = Describe("Rabbit", func() {
 				}
 
 				// Give our watcher a moment to see the msg and cause a reconnect
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// We should've reconnected and got a new conn
 				Expect(r.Conn).ToNot(BeNil())
@@ -146,7 +146,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).To(BeNil())
 
 				// Wait
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Verify messages we received
 				stopErr := r.Stop()
@@ -189,12 +189,12 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr1).ToNot(HaveOccurred())
 
 				// Wait a moment for consumer to pick up messages
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				cancel()
 
 				// Wait a moment for consumer to quit
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				publishErr2 := publishMessages(ch, opts, messages[10:])
 				Expect(publishErr2).ToNot(HaveOccurred())
@@ -272,7 +272,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).To(BeNil())
 
 				// Wait
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Verify messages we received
 				stopErr := r.Stop()
@@ -316,7 +316,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).To(BeNil())
 
 				// Wait
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Verify messages we received
 				stopErr := r.Stop()
@@ -367,7 +367,7 @@ var _ = Describe("Rabbit", func() {
 				}()
 
 				// Wait a moment for consumer to start
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Generate a handful of messages
 				messages := generateRandomStrings(10)
@@ -377,7 +377,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Wait a moment for consumer to get the message
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				Expect(consumeErr).ToNot(HaveOccurred())
 
@@ -422,7 +422,7 @@ var _ = Describe("Rabbit", func() {
 				}()
 
 				// Wait a moment for consumer to connect
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Consumer should not have received a message or exited
 				Expect(receivedMessage).To(BeEmpty())
@@ -431,7 +431,7 @@ var _ = Describe("Rabbit", func() {
 				cancel()
 
 				// Wait for cancel to kick in
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Goroutine should've exited
 				Expect(exit).To(BeTrue())
@@ -468,7 +468,7 @@ var _ = Describe("Rabbit", func() {
 				}()
 
 				// Wait a moment for consumer to connect
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Generate and send a message
 				messages := generateRandomStrings(1)
@@ -477,7 +477,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Wait a moment for consumer to receive the message
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Goroutine should've exited
 				Expect(exit).To(BeTrue())
@@ -569,7 +569,7 @@ var _ = Describe("Rabbit", func() {
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Give our consumer some time to receive the message
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				Expect(receivedMessage).To(Equal(testMessage))
 			})
@@ -613,7 +613,7 @@ var _ = Describe("Rabbit", func() {
 				}()
 
 				// Wait a moment for consumer to start
-				time.Sleep(25 * time.Millisecond)
+				time.Sleep(100 * time.Millisecond)
 
 				// Stop the consumer
 				stopErr := r.Stop()
