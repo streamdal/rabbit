@@ -1,3 +1,13 @@
+// Package rabbit is a simple streadway/amqp wrapper library that comes with:
+//
+// * Auto-reconnect support
+// * Context support
+// * Helpers for consuming once or forever and publishing
+//
+// The library is used internally at https://batch.sh where it powers most of
+// the platform's backend services.
+//
+// For an example, refer to the README.md.
 package rabbit
 
 import (
@@ -13,9 +23,12 @@ import (
 )
 
 const (
+	// How long to wait before attempting to reconnect to a rabbit server
 	DefaultRetryReconnectSec = 60
 )
 
+// IRabbit is the interface that the `rabbit` library implements. It's here as
+// convenience.
 type IRabbit interface {
 	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
 	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
@@ -23,6 +36,8 @@ type IRabbit interface {
 	Stop() error
 }
 
+// Rabbit struct that is instantiated via `New()`. You should not instantiate
+// this struct by hand (unless you have a really good reason to do so).
 type Rabbit struct {
 	Conn                    *amqp.Connection
 	ConsumerDeliveryChannel <-chan amqp.Delivery
@@ -38,6 +53,9 @@ type Rabbit struct {
 	log    *logrus.Entry
 }
 
+// Options determines how the `rabbit` library will behave and should be passed
+// in to rabbit via `New()`. Many of the options are optional (and will fall
+// back to sane defaults).
 type Options struct {
 	// Required; format "amqp://user:pass@host:port"
 	URL string
@@ -85,11 +103,14 @@ type Options struct {
 	QueueDeclare bool
 }
 
+// ConsumeError will be passed down the error channel if/when `f()` func runs
+// into an error during `Consume()`.
 type ConsumeError struct {
 	Message *amqp.Delivery
 	Error   error
 }
 
+// New is used for instantiating the library.
 func New(opts *Options) (*Rabbit, error) {
 	if err := ValidateOptions(opts); err != nil {
 		return nil, errors.Wrap(err, "invalid options")
@@ -127,6 +148,7 @@ func New(opts *Options) (*Rabbit, error) {
 	return r, nil
 }
 
+// ValidateOptions validates various combinations of options.
 func ValidateOptions(opts *Options) error {
 	if opts == nil {
 		return errors.New("Options cannot be nil")
@@ -157,7 +179,20 @@ func ValidateOptions(opts *Options) error {
 	return nil
 }
 
-// Consume message from queue and run given func forever (until you call Stop())
+// Consume consumes messages from the configured queue (`Options.QueueName`) and
+// executes `f` for every received message.
+//
+// `Consume()` will block until it is stopped either via the passed in `ctx` OR
+// by calling `Stop()`
+//
+// It is also possible to see the errors that `f()` runs into by passing in an
+// error channel (`chan *ConsumeError`).
+//
+// Both `ctx` and `errChan` can be `nil`.
+//
+// If the server goes away, `Consume` will automatically attempt to reconnect.
+// Subsequent reconnect attempts will sleep/wait for `DefaultRetryReconnectSec`
+// between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -206,6 +241,11 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 	r.log.Debug("Consume finished - exiting")
 }
 
+// ConsumeOnce will consume exactly one message from the configured queue,
+// execute `runFunc()` on the message and return.
+//
+// Same as with `Consume()`, you can pass in a context to cancel `ConsumeOnce()`
+// or run `Stop()`.
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -231,6 +271,11 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 	return nil
 }
 
+// Publish publishes one message to the configured exchange, using the specified
+// routing key.
+//
+// NOTE: Context semantics are not implemented.
+//
 // TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
 	if ctx == nil {
@@ -262,7 +307,7 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	return nil
 }
 
-// Stop stops an in-progress Consume(...) or ConsumeOnce(...)
+// Stop stops an in-progress `Consume()` or `ConsumeOnce()`.
 func (r *Rabbit) Stop() error {
 	r.cancel()
 

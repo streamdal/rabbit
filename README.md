@@ -2,7 +2,6 @@ rabbit
 ======
 [![](https://godoc.org/github.com/batchcorp/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/batchcorp/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/batchcorp/rabbit)](https://goreportcard.com/report/github.com/batchcorp/rabbit)
 
-
 A RabbitMQ wrapper lib around [streadway/amqp](https://github.com/streadway/amqp) 
 with some bells and whistles.
 
