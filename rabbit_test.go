@@ -16,6 +16,28 @@ import (
 )
 
 var _ = Describe("Rabbit", func() {
+	var (
+		opts *Options
+		r    *Rabbit
+		ch   *amqp.Channel
+	)
+
+	// This runs *after* all of the BeforeEach's AND *before* each It() block
+	JustBeforeEach(func() {
+		var err error
+
+		opts = generateOptions()
+
+		r, err = New(opts)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(r).ToNot(BeNil())
+
+		ch, err = connect(opts)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ch).ToNot(BeNil())
+	})
+
 	Describe("New", func() {
 		When("instantiating rabbit", func() {
 			It("happy: should return a rabbit instance", func() {
@@ -105,29 +127,10 @@ var _ = Describe("Rabbit", func() {
 
 	Describe("Consume", func() {
 		var (
-			opts *Options
-			r    *Rabbit
-
 			errChan = make(chan *ConsumeError, 1)
-			ch      *amqp.Channel
 		)
 
 		When("consuming messages with a context", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("run function is executed with inbound message", func() {
 				receivedMessages := make([]amqp.Delivery, 0)
 
@@ -205,21 +208,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("consuming messages with an error channel", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("any errors returned by run func are passed to error channel", func() {
 				go func() {
 					r.Consume(context.Background(), errChan, func(msg amqp.Delivery) error {
@@ -240,21 +228,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("when a nil error channel is passed in", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("errors are discarded and Consume() continues to work", func() {
 				receivedMessages := make([]string, 0)
 
@@ -284,21 +257,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("a nil context is passed in", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("Consume() continues to work", func() {
 				receivedMessages := make([]string, 0)
 
@@ -329,29 +287,7 @@ var _ = Describe("Rabbit", func() {
 	})
 
 	Describe("ConsumeOnce", func() {
-		var (
-			opts *Options
-			r    *Rabbit
-
-			ch *amqp.Channel
-		)
-
 		When("passed context is nil", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("will continue to work", func() {
 				var receivedMessage string
 				var consumeErr error
@@ -390,21 +326,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("context is passed", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("will listen for cancellation", func() {
 				var consumeErr error
 				var exit bool
@@ -440,21 +361,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("run func gets an error", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("will return the error to the user", func() {
 				var consumeErr error
 				var exit bool
@@ -491,28 +397,7 @@ var _ = Describe("Rabbit", func() {
 	})
 
 	Describe("Publish", func() {
-		var (
-			opts *Options
-			r    *Rabbit
-			ch   *amqp.Channel
-		)
-
 		Context("happy path", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("correctly publishes message", func() {
 				var receivedMessage []byte
 
@@ -538,21 +423,6 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("producer server channel is nil", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("will generate a new server channel", func() {
 				r.ProducerServerChannel = nil
 
@@ -581,28 +451,7 @@ var _ = Describe("Rabbit", func() {
 	})
 
 	Describe("Stop", func() {
-		var (
-			opts *Options
-			r    *Rabbit
-			ch   *amqp.Channel
-		)
-
 		When("consuming messages via Consume()", func() {
-			BeforeEach(func() {
-				var err error
-
-				opts = generateOptions()
-
-				r, err = New(opts)
-
-				Expect(err).ToNot(HaveOccurred())
-				Expect(r).ToNot(BeNil())
-
-				ch, err = connect(opts)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(ch).ToNot(BeNil())
-			})
-
 			It("Stop() should release Consume() and return", func() {
 				var receivedMessage string
 				var exit bool
@@ -633,10 +482,6 @@ var _ = Describe("Rabbit", func() {
 	})
 
 	Describe("validateOptions", func() {
-		var (
-			opts *Options
-		)
-
 		Context("validation combinations", func() {
 			BeforeEach(func() {
 				opts = generateOptions()
