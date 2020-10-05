@@ -54,7 +54,7 @@ func main() {
     }
 
     // Consume once
-    if err := r.ConsumeOnce(nil, func() amqp.Delivery) {
+    if err := r.ConsumeOnce(nil, func(amqp.Delivery) {
         fmt.Printf("Received new message: %+v\n", msg)
     }); err != nil {
         log.Fatalf("unable to consume once: %s", err),
@@ -65,7 +65,7 @@ func main() {
     // Consume forever (blocks)
     ctx, cancel := context.WithCancel(context.Background())
 
-    r.Consume(ctx, func(msg amqp.Delivery) {
+    r.Consume(ctx, nil, func(msg amqp.Delivery) {
         fmt.Printf("Received new message: %+v\n", msg)
         
         numReceived++
@@ -76,7 +76,7 @@ func main() {
     })
 
     // Or stop via ctx 
-    r.Consume(..)    
+    r.Consume(..)
     cancel()
 }
 ```
