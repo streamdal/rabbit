@@ -523,13 +523,15 @@ var _ = Describe("Rabbit", func() {
 					Expect(err).ToNot(HaveOccurred())
 				}()
 
+				time.Sleep(25 * time.Millisecond)
+
 				testMessage := []byte(uuid.NewV4().String())
 				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
 
 				Expect(publishErr).ToNot(HaveOccurred())
 
 				// Give our consumer some time to receive the message
-				time.Sleep(1 * time.Second)
+				time.Sleep(100 * time.Millisecond)
 
 				Expect(receivedMessage).To(Equal(testMessage))
 			})
@@ -562,6 +564,8 @@ var _ = Describe("Rabbit", func() {
 
 					Expect(err).ToNot(HaveOccurred())
 				}()
+
+				time.Sleep(25 * time.Millisecond)
 
 				testMessage := []byte(uuid.NewV4().String())
 				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
