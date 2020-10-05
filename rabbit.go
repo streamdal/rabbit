@@ -312,7 +312,6 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 // Stop stops an in-progress `Consume()` or `ConsumeOnce()`.
 func (r *Rabbit) Stop() error {
 	r.cancel()
-
 	return nil
 }
 
