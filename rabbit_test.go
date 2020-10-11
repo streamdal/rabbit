@@ -4,10 +4,7 @@
 package rabbit
 
 import (
-	"bytes"
 	"context"
-	"io"
-	"os"
 	"time"
 
 	. "github.com/onsi/ginkgo"
