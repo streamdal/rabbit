@@ -49,7 +49,12 @@ var _ = Describe("Rabbit", func() {
 				Expect(r).ToNot(BeNil())
 			})
 
-			It("should error with bad options", func() {
+			It("by default, uses Both mode", func() {
+				Expect(opts.Mode).To(Equal(Both))
+				Expect(r.Options.Mode).To(Equal(Both))
+			})
+
+			It("should error with missing options", func() {
 				r, err := New(nil)
 
 				Expect(err).ToNot(BeNil())
@@ -130,6 +135,31 @@ var _ = Describe("Rabbit", func() {
 			errChan = make(chan *ConsumeError, 1)
 		)
 
+		When("attempting to consume messages in producer mode", func() {
+			It("Consume should not block and immediately return", func() {
+				opts.Mode = Producer
+				ra, err := New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ra).ToNot(BeNil())
+
+				var exit bool
+
+				go func() {
+					r.Consume(nil, nil, func(m amqp.Delivery) error {
+						return nil
+					})
+
+					exit = true
+				}()
+
+				// Give the goroutine a little to start up
+				time.Sleep(50 * time.Millisecond)
+
+				Expect(exit).To(BeTrue())
+			})
+		})
+
 		When("consuming messages with a context", func() {
 			It("run function is executed with inbound message", func() {
 				receivedMessages := make([]amqp.Delivery, 0)
@@ -186,8 +216,8 @@ var _ = Describe("Rabbit", func() {
 
 				messages := generateRandomStrings(20)
 
-				// Publish 5 messages -> cancel -> publish remainder of messages ->
-				// verify runfunc was hit only 5 times
+				// Publish 10 messages -> cancel -> publish remainder of messages ->
+				// verify runfunc was hit only 10 times
 				publishErr1 := publishMessages(ch, opts, messages[0:10])
 				Expect(publishErr1).ToNot(HaveOccurred())
 
@@ -287,6 +317,21 @@ var _ = Describe("Rabbit", func() {
 	})
 
 	Describe("ConsumeOnce", func() {
+		When("Mode is Producer", func() {
+			It("will return an error", func() {
+				opts.Mode = Producer
+				ra, err := New(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(ra).ToNot(BeNil())
+
+				err = ra.ConsumeOnce(nil, func(m amqp.Delivery) error { return nil })
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("library is configured in Producer mode"))
+			})
+		})
+
 		When("passed context is nil", func() {
 			It("will continue to work", func() {
 				var receivedMessage string
@@ -420,6 +465,21 @@ var _ = Describe("Rabbit", func() {
 
 				Expect(receivedMessage).To(Equal(testMessage))
 			})
+
+			When("Mode is Consumer", func() {
+				It("should return an error", func() {
+					opts.Mode = Consumer
+					ra, err := New(opts)
+
+					Expect(err).ToNot(HaveOccurred())
+					Expect(ra).ToNot(BeNil())
+
+					err = ra.Publish(nil, "messages", []byte("test"))
+
+					Expect(err).To(HaveOccurred())
+					Expect(err.Error()).To(ContainSubstring("library is configured in Consumer mode"))
+				})
+			})
 		})
 
 		When("producer server channel is nil", func() {
@@ -481,6 +541,55 @@ var _ = Describe("Rabbit", func() {
 		})
 	})
 
+	Describe("Close", func() {
+		When("called after instantiating new rabbit", func() {
+			It("does not error", func() {
+				err := r.Close()
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		When("called before Consume", func() {
+			It("should cause Consume to immediately return", func() {
+				err := r.Close()
+				Expect(err).ToNot(HaveOccurred())
+
+				// This shouldn't block because internal ctx func should have been called
+				r.Consume(nil, nil, func(m amqp.Delivery) error {
+					return nil
+				})
+
+				Expect(true).To(BeTrue())
+			})
+		})
+
+		When("called before ConsumeOnce", func() {
+			It("ConsumeOnce should timeout", func() {
+				err := r.Close()
+				Expect(err).ToNot(HaveOccurred())
+
+				// This shouldn't block because internal ctx func should have been called
+				err = r.ConsumeOnce(nil, func(m amqp.Delivery) error {
+					return nil
+				})
+
+				Expect(err).ToNot(HaveOccurred())
+			})
+		})
+
+		When("called before Publish", func() {
+			It("Publish should error", func() {
+				err := r.Close()
+				Expect(err).ToNot(HaveOccurred())
+
+				err = r.Publish(nil, "messages", []byte("testing"))
+
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("channel/connection is not open"))
+			})
+		})
+	})
+
 	Describe("validateOptions", func() {
 		Context("validation combinations", func() {
 			BeforeEach(func() {
@@ -490,6 +599,13 @@ var _ = Describe("Rabbit", func() {
 			It("errors with nil options", func() {
 				err := ValidateOptions(nil)
 				Expect(err).To(HaveOccurred())
+			})
+
+			It("should error on invalid mode", func() {
+				opts.Mode = 15
+				err := ValidateOptions(opts)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("invalid mode"))
 			})
 
 			It("errors when URL is unset", func() {
