@@ -753,27 +753,3 @@ func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
 		return nil, errors.New("timed out")
 	}
 }
-
-func startCapture(outC chan string) (*os.File, *os.File) {
-	old := os.Stdout
-	rf, wf, err := os.Pipe()
-	Expect(err).ToNot(HaveOccurred())
-
-	os.Stdout = wf
-
-	// copy the output in a separate goroutine so printing can't block indefinitely
-	go func() {
-		var buf bytes.Buffer
-		io.Copy(&buf, rf)
-		outC <- buf.String()
-	}()
-
-	return wf, old
-}
-
-func endCapture(wf, oldStdout *os.File, outC chan string) string {
-	wf.Close()
-	os.Stdout = oldStdout
-	out := <-outC
-	return out
-}
