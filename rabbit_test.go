@@ -191,6 +191,7 @@ var _ = Describe("Rabbit", func() {
 				for _, msg := range receivedMessages {
 					Expect(msg.Exchange).To(Equal(opts.ExchangeName))
 					Expect(msg.RoutingKey).To(Equal(opts.RoutingKey))
+					Expect(msg.ConsumerTag).To(Equal(opts.ConsumerTag))
 
 					data = append(data, string(msg.Body))
 				}
@@ -444,7 +445,7 @@ var _ = Describe("Rabbit", func() {
 	Describe("Publish", func() {
 		Context("happy path", func() {
 			It("correctly publishes message", func() {
-				var receivedMessage []byte
+				var receivedMessage *amqp.Delivery
 
 				go func() {
 					var err error
@@ -463,7 +464,8 @@ var _ = Describe("Rabbit", func() {
 				// Give our consumer some time to receive the message
 				time.Sleep(100 * time.Millisecond)
 
-				Expect(receivedMessage).To(Equal(testMessage))
+				Expect(receivedMessage.Body).To(Equal(testMessage))
+				Expect(receivedMessage.AppId).To(Equal(opts.AppID))
 			})
 
 			When("Mode is Consumer", func() {
@@ -486,7 +488,7 @@ var _ = Describe("Rabbit", func() {
 			It("will generate a new server channel", func() {
 				r.ProducerServerChannel = nil
 
-				var receivedMessage []byte
+				var receivedMessage *amqp.Delivery
 
 				go func() {
 					var err error
@@ -505,7 +507,7 @@ var _ = Describe("Rabbit", func() {
 				// Give our consumer some time to receive the message
 				time.Sleep(100 * time.Millisecond)
 
-				Expect(receivedMessage).To(Equal(testMessage))
+				Expect(receivedMessage.Body).To(Equal(testMessage))
 			})
 		})
 	})
@@ -655,6 +657,17 @@ var _ = Describe("Rabbit", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(opts.RetryReconnectSec).To(Equal(DefaultRetryReconnectSec))
 			})
+
+			It("sets AppID and ConsumerTag to default if unset", func() {
+				opts.AppID = ""
+				opts.ConsumerTag = ""
+
+				err := ValidateOptions(opts)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(opts.ConsumerTag).To(ContainSubstring("c-rabbit-"))
+				Expect(opts.AppID).To(ContainSubstring("p-rabbit-"))
+			})
 		})
 	})
 })
@@ -678,6 +691,8 @@ func generateOptions() *Options {
 		QueueDurable:       false,
 		QueueExclusive:     false,
 		QueueAutoDelete:    true,
+		AppID:              "rabbit-test-producer",
+		ConsumerTag:        "rabbit-test-consumer",
 	}
 }
 
@@ -718,7 +733,7 @@ func publishMessages(ch *amqp.Channel, opts *Options, messages []string) error {
 	return nil
 }
 
-func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
+func receiveMessage(ch *amqp.Channel, opts *Options) (*amqp.Delivery, error) {
 	tmpQueueName := "rabbit-receiveMessages-" + uuid.NewV4().String()
 
 	if _, err := ch.QueueDeclare(
@@ -744,7 +759,7 @@ func receiveMessage(ch *amqp.Channel, opts *Options) ([]byte, error) {
 	select {
 	case m := <-deliveryChan:
 		logrus.Debug("Test: received message in receiveMessage()")
-		return m.Body, nil
+		return &m, nil
 	case <-time.After(5 * time.Second):
 		logrus.Debug("Test: timed out waiting for message in receiveMessage()")
 		return nil, errors.New("timed out")

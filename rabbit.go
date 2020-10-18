@@ -20,6 +20,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/relistan/go-director"
+	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 )
@@ -31,6 +32,14 @@ const (
 	Both     Mode = 0
 	Consumer Mode = 1
 	Producer Mode = 2
+)
+
+var (
+	// Used for identifying consumer
+	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
+
+	// Used for identifying producer
+	DefaultAppID = "p-rabbit-" + uuid.NewV4().String()[0:8]
 )
 
 // IRabbit is the interface that the `rabbit` library implements. It's here as
@@ -116,6 +125,12 @@ type Options struct {
 
 	// Whether to automatically acknowledge consumed message(s)
 	AutoAck bool
+
+	// Used for identifying consumer
+	ConsumerTag string
+
+	// Used as a property to identify producer
+	AppID string
 }
 
 // ConsumeError will be passed down the error channel if/when `f()` func runs
@@ -191,6 +206,14 @@ func ValidateOptions(opts *Options) error {
 
 	if opts.RetryReconnectSec == 0 {
 		opts.RetryReconnectSec = DefaultRetryReconnectSec
+	}
+
+	if opts.AppID == "" {
+		opts.AppID = DefaultAppID
+	}
+
+	if opts.ConsumerTag == "" {
+		opts.ConsumerTag = DefaultConsumerTag
 	}
 
 	validModes := []Mode{Both, Producer, Consumer}
@@ -344,6 +367,7 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	if err := r.ProducerServerChannel.Publish(r.Options.ExchangeName, routingKey, false, false, amqp.Publishing{
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
+		AppId:        r.Options.AppID,
 	}); err != nil {
 		return err
 	}
@@ -479,7 +503,7 @@ func (r *Rabbit) newConsumerChannel() error {
 
 	deliveryChannel, err := serverChannel.Consume(
 		r.Options.QueueName,
-		"",
+		r.Options.ConsumerTag,
 		r.Options.AutoAck,
 		r.Options.QueueExclusive,
 		false,
