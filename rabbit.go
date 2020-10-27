@@ -515,6 +515,7 @@ func (r *Rabbit) newConsumerChannel() error {
 		return errors.Wrap(err, "unable to create delivery channel")
 	}
 
+	r.ProducerServerChannel = serverChannel
 	r.ConsumerDeliveryChannel = deliveryChannel
 
 	return nil
