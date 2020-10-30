@@ -401,9 +401,10 @@ func (r *Rabbit) watchNotifyClose() {
 
 		r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
 
-		// Acquire mutex to pause all consumers while we reconnect AND prevent
+		// Acquire mutex to pause all consumers/producers while we reconnect AND prevent
 		// access to the channel map
 		r.ConsumerRWMutex.Lock()
+		r.ProducerRWMutex.Lock()
 
 		var attempts int
 
@@ -425,15 +426,26 @@ func (r *Rabbit) watchNotifyClose() {
 		r.Conn.NotifyClose(r.NotifyCloseChan)
 
 		// Update channel
-		if err := r.newConsumerChannel(); err != nil {
-			logrus.Errorf("unable to set new channel: %s", err)
+		if r.Options.Mode == Producer {
+			serverChannel, err := r.newServerChannel()
+			if err != nil {
+				logrus.Errorf("unable to set new channel: %s", err)
+				panic(fmt.Sprintf("unable to set new channel: %s", err))
+			}
 
-			// TODO: This is super shitty. Should address this.
-			panic(fmt.Sprintf("unable to set new channel: %s", err))
+			r.ProducerServerChannel = serverChannel
+		} else {
+			if err := r.newConsumerChannel(); err != nil {
+				logrus.Errorf("unable to set new channel: %s", err)
+
+				// TODO: This is super shitty. Should address this.
+				panic(fmt.Sprintf("unable to set new channel: %s", err))
+			}
 		}
 
-		// Unlock so that consumers can begin reading messages from a new channel
+		// Unlock so that consumers/producers can begin reading messages from a new channel
 		r.ConsumerRWMutex.Unlock()
+		r.ProducerRWMutex.Unlock()
 
 		r.log.Debug("watchNotifyClose has completed successfully")
 	}
