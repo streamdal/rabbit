@@ -17,6 +17,7 @@ package rabbit
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
@@ -299,8 +300,8 @@ func ValidateOptions(opts []*Options) error {
 	return nil
 }
 
-// Consume consumes messages from the configured queue (`Options.QueueName`) and
-// executes `f` for every received message.
+// Consume consumes messages from all configured queues and executes `f` for
+// every received message.
 //
 // `Consume()` will block until it is stopped either via the passed in `ctx` OR
 // by calling `Stop()`
@@ -314,18 +315,42 @@ func ValidateOptions(opts []*Options) error {
 // Subsequent reconnect attempts will sleep/wait for `DefaultRetryReconnectSec`
 // between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(name string, msg amqp.Delivery) error) {
-	if r.Options.Mode == Producer {
-		r.log.Error("unable to Consume() - library is configured in Producer mode")
-		return
+	if len(r.ConsumerDeliveryChannels) < 1 {
+		panic("unable to Consume() - library has no configured ConsumerDeliveryChannels")
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	selectChannels := make([]reflect.SelectCase, 0)
+	nameIndex := make([]string, 0)
+
+	// To listen to N number of channels, we must use reflect.Select.
+	// In addition to returning a value from one of the channels, reflect.Select
+	// also returns the _index_ of the channel we received a message on. We use
+	// this index to lookup the name of the consumer which we then pass to the
+	// ConsumeFunc.
+	for name, ch := range r.ConsumerDeliveryChannels {
+		selectChannel := reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
+
+		selectChannels = append(selectChannels, selectChannel)
+		nameIndex = append(nameIndex, name)
+	}
+
+	// We also need to append the input ctx channel and our internal Stop() chan
+	// as we will no longer using select {} and instead use reflect.Select.
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done)})
+	inputContextIndex := len(selectChannels) + 1
+
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done)})
+	internalContextIndex := len(selectChannels) + 1
+
 	r.log.Debug("waiting for messages from rabbit ...")
 
 	var quit bool
+
+	remaining := len(selectChannels)
 
 	r.ConsumeLooper.Loop(func() error {
 		// This is needed to prevent context flood in case .Quit() wasn't picked
@@ -335,10 +360,51 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 			return nil
 		}
 
-		select {
-		case msg := <-r.delivery():
+		if remaining == 0 {
+			r.log.Warning("no more remaining select channels - time to quit")
+			r.ConsumeLooper.Quit()
+			quit = true
+		}
+
+		index, value, ok := reflect.Select(selectChannels)
+
+		if !ok {
+			r.log.Warningf("delivery channel for '%s' has been closed", nameIndex[index])
+
+			selectChannels[index].Chan = reflect.ValueOf(nil)
+			remaining -= 1
+			return nil
+		}
+
+		switch index {
+		case inputContextIndex:
+			r.log.Warning("stopped via input context")
+			r.ConsumeLooper.Quit()
+			quit = true
+		case internalContextIndex:
+			r.log.Warning("stopped via Stop()")
+			r.ConsumeLooper.Quit()
+			quit = true
+		default:
+			name := nameIndex[index]
+
+			msg, ok := reflect.ValueOf(value).Interface().(amqp.Delivery)
+			if !ok {
+				r.log.Errorf("unable to type assert delivery msg")
+
+				if errChan != nil {
+					// Write in a goroutine in case error channel is not consumed fast enough
+					go func() {
+						errChan <- &ConsumeError{
+							Message: nil,
+							Error:   fmt.Errorf("unable to type assert delivery msg for '%s'", name),
+						}
+					}()
+				}
+			}
+
 			if err := f(name, msg); err != nil {
-				r.log.Debugf("error during consume: %s", err)
+				r.log.Debugf("error during func exec for '%s': %s", name, err)
 
 				if errChan != nil {
 					// Write in a goroutine in case error channel is not consumed fast enough
@@ -350,14 +416,6 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 					}()
 				}
 			}
-		case <-ctx.Done():
-			r.log.Warning("stopped via context")
-			r.ConsumeLooper.Quit()
-			quit = true
-		case <-r.ctx.Done():
-			r.log.Warning("stopped via Stop()")
-			r.ConsumeLooper.Quit()
-			quit = true
 		}
 
 		return nil
