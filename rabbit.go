@@ -2,6 +2,8 @@
 //
 // * Auto-reconnect support
 //
+// * Multi-connector mode
+//
 // * Context support
 //
 // * Helpers for consuming once or forever and publishing
@@ -18,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/pkg/errors"
 	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
@@ -35,18 +38,21 @@ const (
 )
 
 var (
+	// Used for identifying named consumer
+	DefaultNamePrefix = "n-rabbit"
+
 	// Used for identifying consumer
-	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
+	DefaultConsumerTagPrefix = "c-rabbit"
 
 	// Used for identifying producer
-	DefaultAppID = "p-rabbit-" + uuid.NewV4().String()[0:8]
+	DefaultAppIDPrefix = "p-rabbit"
 )
 
 // IRabbit is the interface that the `rabbit` library implements. It's here as
 // convenience.
 type IRabbit interface {
-	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
-	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
+	Consume(ctx context.Context, errChan chan *ConsumeError, f func(name string, msg amqp.Delivery) error)
+	ConsumeOnce(ctx context.Context, runFunc func(name string, msg amqp.Delivery) error) error
 	Publish(ctx context.Context, routingKey string, payload []byte) error
 	Stop() error
 	Close() error
@@ -55,14 +61,19 @@ type IRabbit interface {
 // Rabbit struct that is instantiated via `New()`. You should not instantiate
 // this struct by hand (unless you have a really good reason to do so).
 type Rabbit struct {
-	Conn                    *amqp.Connection
-	ConsumerDeliveryChannel <-chan amqp.Delivery
-	ConsumerRWMutex         *sync.RWMutex
-	NotifyCloseChan         chan *amqp.Error
-	ProducerServerChannel   *amqp.Channel
-	ProducerRWMutex         *sync.RWMutex
-	ConsumeLooper           director.Looper
-	Options                 *Options
+	Conns                    map[string]*amqp.Connection
+	ConsumerDeliveryChannels map[string]<-chan amqp.Delivery
+	ConsumerDeliveryChannel  <-chan amqp.Delivery // old
+	ConsumerRWMutex          *sync.RWMutex        // old
+	ConsumerRWMutexMap       map[string]*sync.RWMutex
+	NotifyCloseChan          chan *amqp.Error // old
+	NotifyCloseChans         map[string]chan *amqp.Error
+	ProducerServerChannels   map[string]*amqp.Channel
+	ProducerServerChannel    *amqp.Channel // old
+	ProducerRWMutex          *sync.RWMutex // old
+	ProducerRWMutexMap       map[string]*sync.RWMutex
+	ConsumeLooper            director.Looper
+	Options                  map[string]*Options
 
 	ctx    context.Context
 	cancel func()
@@ -75,6 +86,10 @@ type Mode int
 // in to rabbit via `New()`. Many of the options are optional (and will fall
 // back to sane defaults).
 type Options struct {
+	// Used for identifying different specific consumers/producers
+	// (only relevant if using rabbit in "multi-connector" mode)
+	Name string
+
 	// Required; format "amqp://user:pass@host:port"
 	URL string
 
@@ -136,98 +151,149 @@ type Options struct {
 // ConsumeError will be passed down the error channel if/when `f()` func runs
 // into an error during `Consume()`.
 type ConsumeError struct {
+	// Name of the consumer that received the error
+	Name    string
 	Message *amqp.Delivery
 	Error   error
 }
 
 // New is used for instantiating the library.
-func New(opts *Options) (*Rabbit, error) {
+func New(opts ...*Options) (*Rabbit, error) {
 	if err := ValidateOptions(opts); err != nil {
 		return nil, errors.Wrap(err, "invalid options")
 	}
 
-	ac, err := amqp.Dial(opts.URL)
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to dial server")
+	// Make options a bit easier to search
+	optsMap := make(map[string]*Options, 0)
+
+	for _, o := range opts {
+		optsMap[o.Name] = o
 	}
 
+	// Connect to all rabbit instances, create notification channels
+	acs := make(map[string]*amqp.Connection, 0)
+	notificationChannels := make(map[string]chan *amqp.Error, 0)
+
+	for _, opt := range opts {
+		ac, err := amqp.Dial(opt.URL)
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to dial server(s)")
+		}
+
+		acs[opt.Name] = ac
+
+		// Create close notification channel
+		notificationChannels[opt.Name] = make(chan *amqp.Error)
+	}
+
+	// Used for stopping consume via Stop()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	r := &Rabbit{
-		Conn:            ac,
-		ConsumerRWMutex: &sync.RWMutex{},
-		NotifyCloseChan: make(chan *amqp.Error),
-		ProducerRWMutex: &sync.RWMutex{},
-		ConsumeLooper:   director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
-		Options:         opts,
+		Conns:                    acs,
+		ConsumerDeliveryChannels: make(map[string]<-chan amqp.Delivery, 0),
+		ProducerServerChannels:   make(map[string]*amqp.Channel, 0),
+		ConsumerRWMutexMap:       make(map[string]*sync.RWMutex),
+		ProducerRWMutexMap:       make(map[string]*sync.RWMutex),
+		NotifyCloseChans:         notificationChannels,
+		ConsumeLooper:            director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
+		Options:                  optsMap,
 
 		ctx:    ctx,
 		cancel: cancel,
 		log:    logrus.WithField("pkg", "rabbit"),
 	}
 
-	if opts.Mode != Producer {
-		if err := r.newConsumerChannel(); err != nil {
-			return nil, errors.Wrap(err, "unable to get initial delivery channel")
-		}
+	// Create mutexes
+	for _, o := range opts {
+		r.ConsumerRWMutexMap[o.Name] = &sync.RWMutex{}
+		r.ProducerRWMutexMap[o.Name] = &sync.RWMutex{}
 	}
 
-	ac.NotifyClose(r.NotifyCloseChan)
+	// Only create consumer channels if we are in "Consumer" or "Both" mode
+	if err := r.createConsumerChannels(); err != nil {
+		return nil, errors.Wrap(err, "unable to create initial consumer channel(s)")
+	}
 
-	// Launch connection watcher/reconnect
-	go r.watchNotifyClose()
+	// Configure all connections to notify us about any happenings
+	for name, conn := range acs {
+		conn.NotifyClose(r.NotifyCloseChans[name])
+	}
+
+	// Launch connection watchers
+	for name, ch := range r.NotifyCloseChans {
+		go r.watchNotifyClose(name, ch)
+	}
 
 	return r, nil
 }
 
 // ValidateOptions validates various combinations of options.
-func ValidateOptions(opts *Options) error {
-	if opts == nil {
-		return errors.New("Options cannot be nil")
+func ValidateOptions(opts []*Options) error {
+	if len(opts) < 1 {
+		return errors.New("at least one set of options must be provided")
 	}
 
-	if opts.URL == "" {
-		return errors.New("URL cannot be empty")
-	}
+	names := make(map[string]bool, 0)
 
-	if opts.ExchangeDeclare {
-		if opts.ExchangeType == "" {
-			return errors.New("ExchangeType cannot be empty if ExchangeDeclare set to true")
+	for i, o := range opts {
+		if o == nil {
+			return errors.New("Options cannot be nil")
 		}
-	}
 
-	if opts.ExchangeName == "" {
-		return errors.New("ExchangeName cannot be empty")
-	}
+		if o.Name == "" {
+			o.Name = DefaultNamePrefix + "-" + uuid.NewV4().String()[0:8]
+		} else {
+			if _, ok := names[o.Name]; ok {
+				return fmt.Errorf("name '%s' in option config must be unique", o.Name)
+			}
 
-	if opts.RoutingKey == "" {
-		return errors.New("RoutingKey cannot be empty")
-	}
-
-	if opts.RetryReconnectSec == 0 {
-		opts.RetryReconnectSec = DefaultRetryReconnectSec
-	}
-
-	if opts.AppID == "" {
-		opts.AppID = DefaultAppID
-	}
-
-	if opts.ConsumerTag == "" {
-		opts.ConsumerTag = DefaultConsumerTag
-	}
-
-	validModes := []Mode{Both, Producer, Consumer}
-
-	var found bool
-
-	for _, validMode := range validModes {
-		if validMode == opts.Mode {
-			found = true
+			names[o.Name] = true
 		}
-	}
 
-	if !found {
-		return fmt.Errorf("invalid mode '%d'", opts.Mode)
+		if o.URL == "" {
+			return errors.New("URL cannot be empty")
+		}
+
+		if o.ExchangeDeclare {
+			if o.ExchangeType == "" {
+				return errors.New("ExchangeType cannot be empty if ExchangeDeclare set to true")
+			}
+		}
+
+		if o.ExchangeName == "" {
+			return errors.New("ExchangeName cannot be empty")
+		}
+
+		if o.RoutingKey == "" {
+			return errors.New("RoutingKey cannot be empty")
+		}
+
+		if o.RetryReconnectSec == 0 {
+			o.RetryReconnectSec = DefaultRetryReconnectSec
+		}
+
+		if o.AppID == "" {
+			o.AppID = DefaultAppIDPrefix + "-" + uuid.NewV4().String()[0:8]
+		}
+
+		if o.ConsumerTag == "" {
+			o.ConsumerTag = DefaultConsumerTagPrefix + "-" + uuid.NewV4().String()[0:8]
+		}
+
+		validModes := []Mode{Both, Producer, Consumer}
+
+		var found bool
+
+		for _, validMode := range validModes {
+			if validMode == o.Mode {
+				found = true
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("invalid mode '%d' for option cfg #%d", o.Mode, i)
+		}
 	}
 
 	return nil
@@ -247,7 +313,7 @@ func ValidateOptions(opts *Options) error {
 // If the server goes away, `Consume` will automatically attempt to reconnect.
 // Subsequent reconnect attempts will sleep/wait for `DefaultRetryReconnectSec`
 // between attempts.
-func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
+func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(name string, msg amqp.Delivery) error) {
 	if r.Options.Mode == Producer {
 		r.log.Error("unable to Consume() - library is configured in Producer mode")
 		return
@@ -271,7 +337,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 		select {
 		case msg := <-r.delivery():
-			if err := f(msg); err != nil {
+			if err := f(name, msg); err != nil {
 				r.log.Debugf("error during consume: %s", err)
 
 				if errChan != nil {
@@ -394,83 +460,90 @@ func (r *Rabbit) Close() error {
 	return nil
 }
 
-func (r *Rabbit) watchNotifyClose() {
+func (r *Rabbit) watchNotifyClose(name string, notifyCloseChan chan *amqp.Error) {
 	// TODO: Use a looper here
 	for {
-		closeErr := <-r.NotifyCloseChan
+		closeErr := <-notifyCloseChan
 
-		r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
+		r.log.Debugf("received message on notify close channel for '%s': '%+v' (reconnecting)",
+			name, closeErr)
 
-		// Acquire mutex to pause all consumers/producers while we reconnect AND prevent
-		// access to the channel map
-		r.ConsumerRWMutex.Lock()
-		r.ProducerRWMutex.Lock()
+		// Acquire mutex to pause all consumers/producers while we reconnect AND
+		// prevent access to the channel map
+		r.ConsumerRWMutexMap[name].Lock()
+		r.ProducerRWMutexMap[name].Lock()
 
 		var attempts int
 
 		for {
 			attempts++
 
-			if err := r.reconnect(); err != nil {
-				r.log.Warningf("unable to complete reconnect: %s; retrying in %d", err, r.Options.RetryReconnectSec)
-				time.Sleep(time.Duration(r.Options.RetryReconnectSec) * time.Second)
+			if err := r.reconnect(name); err != nil {
+				r.log.Warningf("unable to complete reconnect for '%s': %s; retrying in %d",
+					name, err, r.Options[name].RetryReconnectSec)
+
+				time.Sleep(time.Duration(r.Options[name].RetryReconnectSec) * time.Second)
 				continue
 			}
 
-			r.log.Debugf("successfully reconnected after %d attempts", attempts)
+			r.log.Debugf("successfully reconnected '%s' after %d attempts", name, attempts)
 			break
 		}
 
 		// Create and set a new notify close channel (since old one gets closed)
-		r.NotifyCloseChan = make(chan *amqp.Error, 0)
-		r.Conn.NotifyClose(r.NotifyCloseChan)
+		r.NotifyCloseChans[name] = make(chan *amqp.Error, 0)
+		r.Conns[name].NotifyClose(r.NotifyCloseChans[name])
 
 		// Update channel
-		if r.Options.Mode == Producer {
-			serverChannel, err := r.newServerChannel()
+		if r.Options[name].Mode == Producer {
+			serverChannel, err := r.newServerChannel(name)
 			if err != nil {
 				logrus.Errorf("unable to set new channel: %s", err)
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
 			}
 
-			r.ProducerServerChannel = serverChannel
+			r.ProducerServerChannels[name] = serverChannel
 		} else {
-			if err := r.newConsumerChannel(); err != nil {
-				logrus.Errorf("unable to set new channel: %s", err)
+			deliveryChan, serverChan, err := r.newConsumerChannel(name)
+			if err != nil {
+				logrus.Errorf("unable to set new channel for '%s': %s", name, err)
 
 				// TODO: This is super shitty. Should address this.
-				panic(fmt.Sprintf("unable to set new channel: %s", err))
+				panic(fmt.Sprintf("unable to set new channel for '%s': %s", name, err))
 			}
+
+			r.ConsumerDeliveryChannels[name] = deliveryChan
+			r.ProducerServerChannels[name] = serverChan
 		}
 
 		// Unlock so that consumers/producers can begin reading messages from a new channel
-		r.ConsumerRWMutex.Unlock()
-		r.ProducerRWMutex.Unlock()
+		r.ConsumerRWMutexMap[name].Unlock()
+		r.ProducerRWMutexMap[name].Unlock()
 
 		r.log.Debug("watchNotifyClose has completed successfully")
 	}
 }
 
-func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
-	if r.Conn == nil {
-		return nil, errors.New("r.Conn is nil - did this get instantiated correctly? bug?")
+func (r *Rabbit) newServerChannel(name string) (*amqp.Channel, error) {
+	if r.Conns[name] == nil {
+		return nil, errors.New("Conn is nil - did this get instantiated correctly? bug?")
 	}
 
-	ch, err := r.Conn.Channel()
+	ch, err := r.Conns[name].Channel()
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to instantiate channel")
 	}
 
-	if err := ch.Qos(r.Options.QosPrefetchCount, r.Options.QosPrefetchSize, false); err != nil {
+	if err := ch.Qos(r.Options[name].QosPrefetchCount, r.Options[name].QosPrefetchSize, false); err != nil {
 		return nil, errors.Wrap(err, "unable to set qos policy")
 	}
 
-	if r.Options.ExchangeDeclare {
+	if r.Options[name].ExchangeDeclare {
 		if err := ch.ExchangeDeclare(
-			r.Options.ExchangeName,
-			r.Options.ExchangeType,
-			r.Options.ExchangeDurable,
-			r.Options.ExchangeAutoDelete,
+			r.Options[name].ExchangeName,
+			r.Options[name].ExchangeType,
+			r.Options[name].ExchangeDurable,
+			r.Options[name].ExchangeAutoDelete,
 			false,
 			false,
 			nil,
@@ -479,13 +552,13 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		}
 	}
 
-	if r.Options.Mode == Both || r.Options.Mode == Consumer {
-		if r.Options.QueueDeclare {
+	if r.Options[name].Mode == Both || r.Options[name].Mode == Consumer {
+		if r.Options[name].QueueDeclare {
 			if _, err := ch.QueueDeclare(
-				r.Options.QueueName,
-				r.Options.QueueDurable,
-				r.Options.QueueAutoDelete,
-				r.Options.QueueExclusive,
+				r.Options[name].QueueName,
+				r.Options[name].QueueDurable,
+				r.Options[name].QueueAutoDelete,
+				r.Options[name].QueueExclusive,
 				false,
 				nil,
 			); err != nil {
@@ -494,9 +567,9 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		}
 
 		if err := ch.QueueBind(
-			r.Options.QueueName,
-			r.Options.RoutingKey,
-			r.Options.ExchangeName,
+			r.Options[name].QueueName,
+			r.Options[name].RoutingKey,
+			r.Options[name].ExchangeName,
 			false,
 			nil,
 		); err != nil {
@@ -507,39 +580,55 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	return ch, nil
 }
 
-func (r *Rabbit) newConsumerChannel() error {
-	serverChannel, err := r.newServerChannel()
+func (r *Rabbit) createConsumerChannels() error {
+	for _, o := range r.Options {
+		if o.Mode == Producer {
+			continue
+		}
+
+		// We are either Consumer or Both
+		deliveryChan, serverChan, err := r.newConsumerChannel(o)
+		if err != nil {
+			return fmt.Errorf("unable to create consumer channel for '%s': %s", o.Name, err)
+		}
+
+		r.ConsumerDeliveryChannels[o.Name] = deliveryChan
+		r.ProducerServerChannels[o.Name] = serverChan
+	}
+
+	return nil
+}
+
+func (r *Rabbit) newConsumerChannel(name string) (<-chan amqp.Delivery, *amqp.Channel, error) {
+	serverChannel, err := r.newServerChannel(name)
 	if err != nil {
-		return errors.Wrap(err, "unable to create new server channel")
+		return nil, nil, errors.Wrap(err, "unable to create new server channel")
 	}
 
 	deliveryChannel, err := serverChannel.Consume(
-		r.Options.QueueName,
-		r.Options.ConsumerTag,
-		r.Options.AutoAck,
-		r.Options.QueueExclusive,
+		r.Options[name].QueueName,
+		r.Options[name].ConsumerTag,
+		r.Options[name].AutoAck,
+		r.Options[name].QueueExclusive,
 		false,
 		false,
 		nil,
 	)
 
 	if err != nil {
-		return errors.Wrap(err, "unable to create delivery channel")
+		return nil, nil, errors.Wrap(err, "unable to create delivery channel")
 	}
 
-	r.ProducerServerChannel = serverChannel
-	r.ConsumerDeliveryChannel = deliveryChannel
-
-	return nil
+	return deliveryChannel, serverChannel, nil
 }
 
-func (r *Rabbit) reconnect() error {
-	ac, err := amqp.Dial(r.Options.URL)
+func (r *Rabbit) reconnect(name string) error {
+	ac, err := amqp.Dial(r.Options[name].URL)
 	if err != nil {
 		return err
 	}
 
-	r.Conn = ac
+	r.Conns[name] = ac
 
 	return nil
 }
