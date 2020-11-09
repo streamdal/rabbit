@@ -64,14 +64,9 @@ type IRabbit interface {
 type Rabbit struct {
 	Conns                    map[string]*amqp.Connection
 	ConsumerDeliveryChannels map[string]<-chan amqp.Delivery
-	ConsumerDeliveryChannel  <-chan amqp.Delivery // old
-	ConsumerRWMutex          *sync.RWMutex        // old
 	ConsumerRWMutexMap       map[string]*sync.RWMutex
-	NotifyCloseChan          chan *amqp.Error // old
 	NotifyCloseChans         map[string]chan *amqp.Error
 	ProducerServerChannels   map[string]*amqp.Channel
-	ProducerServerChannel    *amqp.Channel // old
-	ProducerRWMutex          *sync.RWMutex // old
 	ProducerRWMutexMap       map[string]*sync.RWMutex
 	ConsumeLooper            director.Looper
 	Options                  map[string]*Options
@@ -316,7 +311,8 @@ func ValidateOptions(opts []*Options) error {
 // between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(name string, msg amqp.Delivery) error) {
 	if len(r.ConsumerDeliveryChannels) < 1 {
-		panic("unable to Consume() - library has no configured ConsumerDeliveryChannels")
+		r.log.Error("unable to Consume() - library has no configured ConsumerDeliveryChannels")
+		return
 	}
 
 	if ctx == nil {
@@ -340,10 +336,10 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 	// We also need to append the input ctx channel and our internal Stop() chan
 	// as we will no longer using select {} and instead use reflect.Select.
-	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done)})
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())})
 	inputContextIndex := len(selectChannels) + 1
 
-	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done)})
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done())})
 	internalContextIndex := len(selectChannels) + 1
 
 	r.log.Debug("waiting for messages from rabbit ...")
@@ -369,7 +365,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 		index, value, ok := reflect.Select(selectChannels)
 
 		if !ok {
-			r.log.Warningf("delivery channel for '%s' has been closed", nameIndex[index])
+			r.log.Warning("delivery channel for has been closed")
 
 			selectChannels[index].Chan = reflect.ValueOf(nil)
 			remaining -= 1
@@ -388,7 +384,8 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 		default:
 			name := nameIndex[index]
 
-			msg, ok := reflect.ValueOf(value).Interface().(amqp.Delivery)
+			msg, ok := value.Interface().(amqp.Delivery)
+			//msg, ok := reflect.ValueOf(value).Interface().(amqp.Delivery)
 			if !ok {
 				r.log.Errorf("unable to type assert delivery msg")
 
@@ -455,10 +452,10 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(name string, msg 
 
 	// We also need to append the input ctx channel and our internal Stop() chan
 	// as we will no longer using select {} and instead use reflect.Select.
-	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done)})
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done())})
 	inputContextIndex := len(selectChannels) + 1
 
-	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done)})
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done())})
 	internalContextIndex := len(selectChannels) + 1
 
 	remaining := len(selectChannels)
@@ -749,12 +746,4 @@ func (r *Rabbit) reconnect(name string) error {
 	r.Conns[name] = ac
 
 	return nil
-}
-
-func (r *Rabbit) delivery() <-chan amqp.Delivery {
-	// Acquire lock (in case we are reconnecting and channels are being swapped)
-	r.ConsumerRWMutex.RLock()
-	defer r.ConsumerRWMutex.RUnlock()
-
-	return r.ConsumerDeliveryChannel
 }
