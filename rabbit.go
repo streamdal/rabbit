@@ -18,10 +18,10 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
-	"cloud.google.com/go/storage"
 	"github.com/pkg/errors"
 	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
@@ -429,28 +429,73 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 //
 // Same as with `Consume()`, you can pass in a context to cancel `ConsumeOnce()`
 // or run `Stop()`.
-func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
-	if r.Options.Mode == Producer {
-		return errors.New("unable to ConsumeOnce - library is configured in Producer mode")
+func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(name string, msg amqp.Delivery) error) error {
+	if len(r.ConsumerDeliveryChannels) < 1 {
+		panic("unable to Consume() - library has no configured ConsumerDeliveryChannels")
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
+	selectChannels := make([]reflect.SelectCase, 0)
+	nameIndex := make([]string, 0)
+
+	// To listen to N number of channels, we must use reflect.Select.
+	// In addition to returning a value from one of the channels, reflect.Select
+	// also returns the _index_ of the channel we received a message on. We use
+	// this index to lookup the name of the consumer which we then pass to the
+	// ConsumeFunc.
+	for name, ch := range r.ConsumerDeliveryChannels {
+		selectChannel := reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)}
+
+		selectChannels = append(selectChannels, selectChannel)
+		nameIndex = append(nameIndex, name)
+	}
+
+	// We also need to append the input ctx channel and our internal Stop() chan
+	// as we will no longer using select {} and instead use reflect.Select.
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ctx.Done)})
+	inputContextIndex := len(selectChannels) + 1
+
+	selectChannels = append(selectChannels, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(r.ctx.Done)})
+	internalContextIndex := len(selectChannels) + 1
+
+	remaining := len(selectChannels)
+
 	r.log.Debug("waiting for a single message from rabbit ...")
 
-	select {
-	case msg := <-r.delivery():
-		if err := runFunc(msg); err != nil {
-			return err
-		}
-	case <-ctx.Done():
-		r.log.Warning("stopped via context")
+	index, value, ok := reflect.Select(selectChannels)
+
+	if !ok {
+		r.log.Warningf("delivery channel for '%s' has been closed", nameIndex[index])
+
+		selectChannels[index].Chan = reflect.ValueOf(nil)
+		remaining -= 1
 		return nil
-	case <-r.ctx.Done():
+	}
+
+	switch index {
+	case inputContextIndex:
+		r.log.Warning("stopped via input context")
+		return nil
+	case internalContextIndex:
 		r.log.Warning("stopped via Stop()")
 		return nil
+	default:
+		name := nameIndex[index]
+
+		msg, ok := reflect.ValueOf(value).Interface().(amqp.Delivery)
+		if !ok {
+			r.log.Errorf("unable to type assert delivery msg for '%s'", name)
+
+			return errors.New("unable to type assert deliver msg")
+		}
+
+		if err := runFunc(name, msg); err != nil {
+			r.log.Debugf("error during func exec for '%s': %s", name, err)
+			return fmt.Errorf("error during func exec for '%s': %s", name, err)
+		}
 	}
 
 	r.log.Debug("ConsumeOnce finished - exiting")
@@ -458,42 +503,49 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 	return nil
 }
 
-// Publish publishes one message to the configured exchange, using the specified
-// routing key.
+// Publish publishes one message to ALL producer server channels.
 //
 // NOTE: Context semantics are not implemented.
-//
-// TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
-	if r.Options.Mode == Consumer {
-		return errors.New("unable to Publish - library is configured in Consumer mode")
+	if len(r.ProducerServerChannels) < 1 {
+		return errors.New("unable to Publish - library has no producer server channels")
 	}
 
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	// Is this the first time we're publishing?
-	if r.ProducerServerChannel == nil {
-		ch, err := r.newServerChannel()
-		if err != nil {
-			return errors.Wrap(err, "unable to create server channel")
+	//// Is this the first time we're publishing?
+	//if r.ProducerServerChannel == nil {
+	//	ch, err := r.newServerChannel()
+	//	if err != nil {
+	//		return errors.Wrap(err, "unable to create server channel")
+	//	}
+	//
+	//	r.ProducerRWMutex.Lock()
+	//	r.ProducerServerChannel = ch
+	//	r.ProducerRWMutex.Unlock()
+	//}
+
+	errs := make([]string, 0)
+
+	for name, channel := range r.ProducerServerChannels {
+		r.ProducerRWMutexMap[name].RLock()
+
+		if err := channel.Publish(r.Options[name].ExchangeName, routingKey, false, false, amqp.Publishing{
+			DeliveryMode: amqp.Persistent,
+			Body:         body,
+			AppId:        r.Options[name].AppID,
+		}); err != nil {
+			r.log.Errorf("unable to publish to '%s': %s", name, err)
+			errs = append(errs, fmt.Sprintf("unable to publish to '%s': %s", name, err))
 		}
 
-		r.ProducerRWMutex.Lock()
-		r.ProducerServerChannel = ch
-		r.ProducerRWMutex.Unlock()
+		r.ProducerRWMutexMap[name].RUnlock()
 	}
 
-	r.ProducerRWMutex.RLock()
-	defer r.ProducerRWMutex.RUnlock()
-
-	if err := r.ProducerServerChannel.Publish(r.Options.ExchangeName, routingKey, false, false, amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
-		Body:         body,
-		AppId:        r.Options.AppID,
-	}); err != nil {
-		return err
+	if len(errs) != 0 {
+		return errors.New(strings.Join(errs, "; "))
 	}
 
 	return nil
@@ -511,8 +563,16 @@ func (r *Rabbit) Stop() error {
 func (r *Rabbit) Close() error {
 	r.cancel()
 
-	if err := r.Conn.Close(); err != nil {
-		return fmt.Errorf("unable to close amqp connection: %s", err)
+	errs := make([]string, 0)
+
+	for name, conn := range r.Conns {
+		if err := conn.Close(); err != nil {
+			errs = append(errs, fmt.Sprintf("unable to close '%s' amqp connection: %s", name, err))
+		}
+	}
+
+	if len(errs) != 0 {
+		return errors.New(strings.Join(errs, "; "))
 	}
 
 	return nil
@@ -645,7 +705,7 @@ func (r *Rabbit) createConsumerChannels() error {
 		}
 
 		// We are either Consumer or Both
-		deliveryChan, serverChan, err := r.newConsumerChannel(o)
+		deliveryChan, serverChan, err := r.newConsumerChannel(o.Name)
 		if err != nil {
 			return fmt.Errorf("unable to create consumer channel for '%s': %s", o.Name, err)
 		}

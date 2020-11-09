@@ -3,6 +3,7 @@ module github.com/batchcorp/rabbit
 go 1.14
 
 require (
+	cloud.google.com/go/storage v1.10.0
 	github.com/googleapis/gax-go v1.0.3 // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/onsi/ginkgo v1.14.1
