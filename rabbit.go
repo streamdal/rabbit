@@ -14,6 +14,7 @@ package rabbit
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"sync"
 	"time"
@@ -131,6 +132,12 @@ type Options struct {
 
 	// Used as a property to identify producer
 	AppID string
+
+	// Use TLS
+	UseTLS bool
+
+	// Skip cert verification (only applies if UseTLS is true)
+	SkipVerifyTLS bool
 }
 
 // ConsumeError will be passed down the error channel if/when `f()` func runs
@@ -146,7 +153,21 @@ func New(opts *Options) (*Rabbit, error) {
 		return nil, errors.Wrap(err, "invalid options")
 	}
 
-	ac, err := amqp.Dial(opts.URL)
+	var ac *amqp.Connection
+	var err error
+
+	if opts.UseTLS {
+		tlsConfig := &tls.Config{}
+
+		if opts.SkipVerifyTLS {
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		ac, err = amqp.DialTLS(opts.URL, tlsConfig)
+	} else {
+		ac, err = amqp.Dial(opts.URL)
+	}
+
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to dial server")
 	}
