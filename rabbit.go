@@ -36,6 +36,8 @@ const (
 )
 
 var (
+	ShutdownError = errors.New("connection has been shutdown")
+
 	// Used for identifying consumer
 	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
 
@@ -65,9 +67,10 @@ type Rabbit struct {
 	ConsumeLooper           director.Looper
 	Options                 *Options
 
-	ctx    context.Context
-	cancel func()
-	log    *logrus.Entry
+	shutdown bool
+	ctx      context.Context
+	cancel   func()
+	log      *logrus.Entry
 }
 
 type Mode int
@@ -269,6 +272,11 @@ func ValidateOptions(opts *Options) error {
 // Subsequent reconnect attempts will sleep/wait for `DefaultRetryReconnectSec`
 // between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
+	if r.shutdown {
+		r.log.Error(ShutdownError)
+		return
+	}
+
 	if r.Options.Mode == Producer {
 		r.log.Error("unable to Consume() - library is configured in Producer mode")
 		return
@@ -327,6 +335,10 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 // Same as with `Consume()`, you can pass in a context to cancel `ConsumeOnce()`
 // or run `Stop()`.
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
+	if r.shutdown {
+		return ShutdownError
+	}
+
 	if r.Options.Mode == Producer {
 		return errors.New("unable to ConsumeOnce - library is configured in Producer mode")
 	}
@@ -362,6 +374,10 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 //
 // TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
+	if r.shutdown {
+		return ShutdownError
+	}
+
 	if r.Options.Mode == Consumer {
 		return errors.New("unable to Publish - library is configured in Consumer mode")
 	}
@@ -412,6 +428,8 @@ func (r *Rabbit) Close() error {
 		return fmt.Errorf("unable to close amqp connection: %s", err)
 	}
 
+	r.shutdown = true
+
 	return nil
 }
 
@@ -442,7 +460,7 @@ func (r *Rabbit) watchNotifyClose() {
 			break
 		}
 
-		// Create and set a new notify close channel (since old one gets closed)
+		// Create and set a new notify close channel (since old one gets shutdown)
 		r.NotifyCloseChan = make(chan *amqp.Error, 0)
 		r.Conn.NotifyClose(r.NotifyCloseChan)
 

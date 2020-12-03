@@ -575,7 +575,8 @@ var _ = Describe("Rabbit", func() {
 					return nil
 				})
 
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(Equal(ShutdownError))
 			})
 		})
 
@@ -587,7 +588,7 @@ var _ = Describe("Rabbit", func() {
 				err = r.Publish(nil, "messages", []byte("testing"))
 
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("channel/connection is not open"))
+				Expect(err).To(Equal(ShutdownError))
 			})
 		})
 	})
