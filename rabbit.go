@@ -573,6 +573,9 @@ func (r *Rabbit) newConsumerChannel() error {
 }
 
 func (r *Rabbit) reconnect() error {
+	var ac *amqp.Connection
+	var err error
+
 	if r.Options.UseTLS {
 		tlsConfig := &tls.Config{}
 
