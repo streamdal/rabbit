@@ -573,7 +573,18 @@ func (r *Rabbit) newConsumerChannel() error {
 }
 
 func (r *Rabbit) reconnect() error {
-	ac, err := amqp.Dial(r.Options.URL)
+	if r.Options.UseTLS {
+		tlsConfig := &tls.Config{}
+
+		if r.Options.SkipVerifyTLS {
+			tlsConfig.InsecureSkipVerify = true
+		}
+
+		ac, err = amqp.DialTLS(r.Options.URL, tlsConfig)
+	} else {
+		ac, err = amqp.Dial(r.Options.URL)
+	}
+
 	if err != nil {
 		return err
 	}
