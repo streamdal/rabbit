@@ -190,7 +190,7 @@ var _ = Describe("Rabbit", func() {
 				// Verify message attributes
 				for _, msg := range receivedMessages {
 					Expect(msg.Exchange).To(Equal(opts.ExchangeName))
-					Expect(msg.RoutingKey).To(Equal(opts.RoutingKey))
+					Expect(msg.RoutingKey).To(Equal(opts.BindingKeys[0]))
 					Expect(msg.ConsumerTag).To(Equal(opts.ConsumerTag))
 
 					data = append(data, string(msg.Body))
@@ -457,7 +457,7 @@ var _ = Describe("Rabbit", func() {
 				time.Sleep(25 * time.Millisecond)
 
 				testMessage := []byte(uuid.NewV4().String())
-				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
+				publishErr := r.Publish(nil, opts.BindingKeys[0], testMessage)
 
 				Expect(publishErr).ToNot(HaveOccurred())
 
@@ -500,7 +500,7 @@ var _ = Describe("Rabbit", func() {
 				time.Sleep(25 * time.Millisecond)
 
 				testMessage := []byte(uuid.NewV4().String())
-				publishErr := r.Publish(nil, opts.RoutingKey, testMessage)
+				publishErr := r.Publish(nil, opts.BindingKeys[0], testMessage)
 
 				Expect(publishErr).ToNot(HaveOccurred())
 
@@ -642,12 +642,12 @@ var _ = Describe("Rabbit", func() {
 				Expect(err.Error()).To(ContainSubstring("ExchangeName cannot be empty"))
 			})
 
-			It("errors if RoutingKey is unset", func() {
-				opts.RoutingKey = ""
+			It("errors if BindingKeys is unset", func() {
+				opts.BindingKeys = []string{}
 
 				err := ValidateOptions(opts)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("RoutingKey cannot be empty"))
+				Expect(err.Error()).To(ContainSubstring("At least one BindingKeys must be specified"))
 			})
 
 			It("sets RetryConnect to default if unset", func() {
@@ -684,7 +684,7 @@ func generateOptions() *Options {
 		ExchangeDeclare:    true,
 		ExchangeDurable:    false,
 		ExchangeAutoDelete: true,
-		RoutingKey:         exchangeName,
+		BindingKeys:        []string{exchangeName},
 		QosPrefetchCount:   0,
 		QosPrefetchSize:    0,
 		RetryReconnectSec:  10,
@@ -723,7 +723,7 @@ func connect(opts *Options) (*amqp.Channel, error) {
 
 func publishMessages(ch *amqp.Channel, opts *Options, messages []string) error {
 	for _, v := range messages {
-		if err := ch.Publish(opts.ExchangeName, opts.RoutingKey, false, false, amqp.Publishing{
+		if err := ch.Publish(opts.ExchangeName, opts.BindingKeys[0], false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			Body:         []byte(v),
 		}); err != nil {
@@ -748,7 +748,7 @@ func receiveMessage(ch *amqp.Channel, opts *Options) (*amqp.Delivery, error) {
 		return nil, errors.Wrap(err, "unable to declare queue")
 	}
 
-	if err := ch.QueueBind(tmpQueueName, opts.RoutingKey, opts.ExchangeName, false, nil); err != nil {
+	if err := ch.QueueBind(tmpQueueName, opts.BindingKeys[0], opts.ExchangeName, false, nil); err != nil {
 		return nil, errors.Wrap(err, "unable to bind queue")
 	}
 
