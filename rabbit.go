@@ -91,8 +91,8 @@ type Options struct {
 	// Required
 	ExchangeName string
 
-	// Used as either routing (publish) or binding key (consume)
-	RoutingKey string
+	// Bind a queue to one or more routing keys
+	BindingKeys []string
 
 	// Whether to declare/create exchange on connect
 	ExchangeDeclare bool
@@ -224,10 +224,6 @@ func ValidateOptions(opts *Options) error {
 		return errors.New("ExchangeName cannot be empty")
 	}
 
-	if opts.RoutingKey == "" {
-		return errors.New("RoutingKey cannot be empty")
-	}
-
 	if opts.RetryReconnectSec == 0 {
 		opts.RetryReconnectSec = DefaultRetryReconnectSec
 	}
@@ -252,6 +248,13 @@ func ValidateOptions(opts *Options) error {
 
 	if !found {
 		return fmt.Errorf("invalid mode '%d'", opts.Mode)
+	}
+
+	// BindingKeys are only needed if Consumer or Both
+	if opts.Mode != Producer {
+		if len(opts.BindingKeys) < 1 {
+			return errors.New("At least one BindingKeys must be specified")
+		}
 	}
 
 	return nil
@@ -532,14 +535,16 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 			}
 		}
 
-		if err := ch.QueueBind(
-			r.Options.QueueName,
-			r.Options.RoutingKey,
-			r.Options.ExchangeName,
-			false,
-			nil,
-		); err != nil {
-			return nil, errors.Wrap(err, "unable to bind queue")
+		for _, bindingKey := range r.Options.BindingKeys {
+			if err := ch.QueueBind(
+				r.Options.QueueName,
+				bindingKey,
+				r.Options.ExchangeName,
+				false,
+				nil,
+			); err != nil {
+				return nil, errors.Wrap(err, "unable to bind queue")
+			}
 		}
 	}
 
