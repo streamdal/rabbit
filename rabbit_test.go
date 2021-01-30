@@ -75,13 +75,12 @@ var _ = Describe("Rabbit", func() {
 
 			It("happy: it should succeed after having failed on unreachable rabbit server", func() {
 				opts := generateOptions()
-				opts.URLs = []string{"amqp://bad-url"}
+				opts.URLs = []string{"amqp://bad-url", "amqp://localhost"}
 
 				r, err := New(opts)
 
-				Expect(err).ToNot(BeNil())
-				Expect(err.Error()).To(ContainSubstring("unable to dial server"))
-				Expect(r).To(BeNil())
+				Expect(err).To(BeNil())
+				Expect(r).ToNot(BeNil())
 			})
 
 			It("instantiates various internals", func() {
