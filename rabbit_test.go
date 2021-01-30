@@ -64,7 +64,18 @@ var _ = Describe("Rabbit", func() {
 
 			It("should error with unreachable rabbit server", func() {
 				opts := generateOptions()
-				opts.URL = "amqp://bad-url"
+				opts.URLs = []string{"amqp://bad-url"}
+
+				r, err := New(opts)
+
+				Expect(err).ToNot(BeNil())
+				Expect(err.Error()).To(ContainSubstring("unable to dial server"))
+				Expect(r).To(BeNil())
+			})
+
+			It("happy: it should succeed after having failed on unreachable rabbit server", func() {
+				opts := generateOptions()
+				opts.URLs = []string{"amqp://bad-url"}
 
 				r, err := New(opts)
 
@@ -611,12 +622,20 @@ var _ = Describe("Rabbit", func() {
 				Expect(err.Error()).To(ContainSubstring("invalid mode"))
 			})
 
-			It("errors when URL is unset", func() {
-				opts.URL = ""
+			It("errors when no valid URL is set", func() {
+				opts.URLs = []string{"", "", ""}
 
 				err := ValidateOptions(opts)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("URL cannot be empty"))
+				Expect(err.Error()).To(ContainSubstring("At least one non-empty URL must be provided"))
+			})
+
+			It("errors when no URL is set", func() {
+				opts.URLs = []string{}
+
+				err := ValidateOptions(opts)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("At least one non-empty URL must be provided"))
 			})
 
 			It("only checks ExchangeType if ExchangeDeclare is true", func() {
@@ -677,7 +696,7 @@ func generateOptions() *Options {
 	exchangeName := "rabbit-" + uuid.NewV4().String()
 
 	return &Options{
-		URL:                "amqp://localhost",
+		URLs:               []string{"amqp://localhost"},
 		QueueName:          "rabbit-" + uuid.NewV4().String(),
 		ExchangeName:       exchangeName,
 		ExchangeType:       "topic",
@@ -708,7 +727,16 @@ func generateRandomStrings(num int) []string {
 }
 
 func connect(opts *Options) (*amqp.Channel, error) {
-	ac, err := amqp.Dial(opts.URL)
+	var err error
+	var ac *amqp.Connection
+	for _, url := range opts.URLs {
+		ac, err = amqp.Dial(url)
+		if err != nil {
+			ac = nil
+		} else {
+			break
+		}
+	}
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to dial rabbit server")
 	}
