@@ -30,8 +30,11 @@ const (
 	// How long to wait before attempting to reconnect to a rabbit server
 	DefaultRetryReconnectSec = 60
 
-	Both     Mode = 0
+	// Both means that the client is acting as both a consumer and a producer.
+	Both Mode = 0
+	// Consumer means that the client is acting as a consumer.
 	Consumer Mode = 1
+	// Producer means that the client is acting as a producer.
 	Producer Mode = 2
 )
 
@@ -73,6 +76,8 @@ type Rabbit struct {
 	log      *logrus.Entry
 }
 
+// Mode is the type used to represent whether the RabbitMQ
+// cliens is acting as a consumer, a producer, or both.
 type Mode int
 
 // Options determines how the `rabbit` library will behave and should be passed
@@ -80,7 +85,7 @@ type Mode int
 // back to sane defaults).
 type Options struct {
 	// Required; format "amqp://user:pass@host:port"
-	URL string
+	URLs []string
 
 	// In what mode does the library operate (Both, Consumer, Producer)
 	Mode Mode
@@ -159,16 +164,26 @@ func New(opts *Options) (*Rabbit, error) {
 	var ac *amqp.Connection
 	var err error
 
-	if opts.UseTLS {
-		tlsConfig := &tls.Config{}
+	// try all available URLs in a loop and quit as soon as it
+	// can successfully establish a connection to one of them
+	for _, url := range opts.URLs {
+		err = nil
+		if opts.UseTLS {
+			tlsConfig := &tls.Config{}
 
-		if opts.SkipVerifyTLS {
-			tlsConfig.InsecureSkipVerify = true
+			if opts.SkipVerifyTLS {
+				tlsConfig.InsecureSkipVerify = true
+			}
+
+			ac, err = amqp.DialTLS(url, tlsConfig)
+		} else {
+			ac, err = amqp.Dial(url)
 		}
 
-		ac, err = amqp.DialTLS(opts.URL, tlsConfig)
-	} else {
-		ac, err = amqp.Dial(opts.URL)
+		if err == nil {
+			// yes, we made it!
+			break
+		}
 	}
 
 	if err != nil {
@@ -210,8 +225,15 @@ func ValidateOptions(opts *Options) error {
 		return errors.New("Options cannot be nil")
 	}
 
-	if opts.URL == "" {
-		return errors.New("URL cannot be empty")
+	validURL := false
+	for _, url := range opts.URLs {
+		if len(url) > 0 {
+			validURL = true
+			break
+		}
+	}
+	if !validURL {
+		return errors.New("At least one non-empty URL must be provided")
 	}
 
 	if opts.ExchangeDeclare {
@@ -566,7 +588,6 @@ func (r *Rabbit) newConsumerChannel() error {
 		false,
 		nil,
 	)
-
 	if err != nil {
 		return errors.Wrap(err, "unable to create delivery channel")
 	}
@@ -581,16 +602,26 @@ func (r *Rabbit) reconnect() error {
 	var ac *amqp.Connection
 	var err error
 
-	if r.Options.UseTLS {
-		tlsConfig := &tls.Config{}
+	// try all available URLs in a loop and quit as soon as it
+	// can successfully establish a connection to one of them
+	for _, url := range r.Options.URLs {
+		err = nil
+		if r.Options.UseTLS {
+			tlsConfig := &tls.Config{}
 
-		if r.Options.SkipVerifyTLS {
-			tlsConfig.InsecureSkipVerify = true
+			if r.Options.SkipVerifyTLS {
+				tlsConfig.InsecureSkipVerify = true
+			}
+
+			ac, err = amqp.DialTLS(url, tlsConfig)
+		} else {
+			ac, err = amqp.Dial(url)
 		}
 
-		ac, err = amqp.DialTLS(r.Options.URL, tlsConfig)
-	} else {
-		ac, err = amqp.Dial(r.Options.URL)
+		if err == nil {
+			// yes, we made it!
+			break
+		}
 	}
 
 	if err != nil {
