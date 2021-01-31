@@ -80,19 +80,9 @@ type Rabbit struct {
 // cliens is acting as a consumer, a producer, or both.
 type Mode int
 
-// Options determines how the `rabbit` library will behave and should be passed
-// in to rabbit via `New()`. Many of the options are optional (and will fall
-// back to sane defaults).
-type Options struct {
-	// Required; format "amqp://user:pass@host:port"
-	URLs []string
-
-	// In what mode does the library operate (Both, Consumer, Producer)
-	Mode Mode
-
-	// If left empty, server will auto generate queue name
-	QueueName string
-
+// Binding represents the information needed to bind a queue to
+// an Exchange.
+type Binding struct {
 	// Required
 	ExchangeName string
 
@@ -110,6 +100,24 @@ type Options struct {
 
 	// Whether to delete exchange when its no longer used; used only if ExchangeDeclare set to true
 	ExchangeAutoDelete bool
+}
+
+// Options determines how the `rabbit` library will behave and should be passed
+// in to rabbit via `New()`. Many of the options are optional (and will fall
+// back to sane defaults).
+type Options struct {
+	// Required; format "amqp://user:pass@host:port"
+	URLs []string
+
+	// In what mode does the library operate (Both, Consumer, Producer)
+	Mode Mode
+
+	// If left empty, server will auto generate queue name
+	QueueName string
+
+	// Bindings is the set of information need to bind a queue to one or
+	// more exchanges, specifying one or more binding (routing) keys.
+	Bindings []Binding
 
 	// https://godoc.org/github.com/streadway/amqp#Channel.Qos
 	// Leave unset if no QoS preferences
@@ -236,14 +244,32 @@ func ValidateOptions(opts *Options) error {
 		return errors.New("At least one non-empty URL must be provided")
 	}
 
-	if opts.ExchangeDeclare {
-		if opts.ExchangeType == "" {
-			return errors.New("ExchangeType cannot be empty if ExchangeDeclare set to true")
+	if len(opts.Bindings) == 0 {
+		return errors.New("At least one Exchange must be specified")
+	}
+
+	if opts.Mode == Producer || opts.Mode == Both {
+		if len(opts.Bindings) > 1 {
+			return errors.New("Exactly one Exchange must be specified when publishing messages")
 		}
 	}
 
-	if opts.ExchangeName == "" {
-		return errors.New("ExchangeName cannot be empty")
+	for _, binding := range opts.Bindings {
+		if binding.ExchangeDeclare {
+			if binding.ExchangeType == "" {
+				return errors.New("ExchangeType cannot be empty if ExchangeDeclare set to true")
+			}
+		}
+		if binding.ExchangeName == "" {
+			return errors.New("ExchangeName cannot be empty")
+		}
+
+		// BindingKeys are only needed if Consumer or Both
+		if opts.Mode != Producer {
+			if len(binding.BindingKeys) < 1 {
+				return errors.New("At least one BindingKeys must be specified")
+			}
+		}
 	}
 
 	if opts.RetryReconnectSec == 0 {
@@ -270,13 +296,6 @@ func ValidateOptions(opts *Options) error {
 
 	if !found {
 		return fmt.Errorf("invalid mode '%d'", opts.Mode)
-	}
-
-	// BindingKeys are only needed if Consumer or Both
-	if opts.Mode != Producer {
-		if len(opts.BindingKeys) < 1 {
-			return errors.New("At least one BindingKeys must be specified")
-		}
 	}
 
 	return nil
@@ -426,7 +445,7 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	r.ProducerRWMutex.RLock()
 	defer r.ProducerRWMutex.RUnlock()
 
-	if err := r.ProducerServerChannel.Publish(r.Options.ExchangeName, routingKey, false, false, amqp.Publishing{
+	if err := r.ProducerServerChannel.Publish(r.Options.Bindings[0].ExchangeName, routingKey, false, false, amqp.Publishing{
 		DeliveryMode: amqp.Persistent,
 		Body:         body,
 		AppId:        r.Options.AppID,
@@ -529,20 +548,6 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		return nil, errors.Wrap(err, "unable to set qos policy")
 	}
 
-	if r.Options.ExchangeDeclare {
-		if err := ch.ExchangeDeclare(
-			r.Options.ExchangeName,
-			r.Options.ExchangeType,
-			r.Options.ExchangeDurable,
-			r.Options.ExchangeAutoDelete,
-			false,
-			false,
-			nil,
-		); err != nil {
-			return nil, errors.Wrap(err, "unable to declare exchange")
-		}
-	}
-
 	if r.Options.Mode == Both || r.Options.Mode == Consumer {
 		if r.Options.QueueDeclare {
 			if _, err := ch.QueueDeclare(
@@ -556,16 +561,35 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 				return nil, err
 			}
 		}
+	}
 
-		for _, bindingKey := range r.Options.BindingKeys {
-			if err := ch.QueueBind(
-				r.Options.QueueName,
-				bindingKey,
-				r.Options.ExchangeName,
+	for _, binding := range r.Options.Bindings {
+
+		if binding.ExchangeDeclare {
+			if err := ch.ExchangeDeclare(
+				binding.ExchangeName,
+				binding.ExchangeType,
+				binding.ExchangeDurable,
+				binding.ExchangeAutoDelete,
+				false,
 				false,
 				nil,
 			); err != nil {
-				return nil, errors.Wrap(err, "unable to bind queue")
+				return nil, errors.Wrap(err, "unable to declare exchange")
+			}
+		}
+
+		if r.Options.Mode == Both || r.Options.Mode == Consumer {
+			for _, bindingKey := range binding.BindingKeys {
+				if err := ch.QueueBind(
+					r.Options.QueueName,
+					bindingKey,
+					binding.ExchangeName,
+					false,
+					nil,
+				); err != nil {
+					return nil, errors.Wrap(err, "unable to bind queue")
+				}
 			}
 		}
 	}

@@ -199,8 +199,8 @@ var _ = Describe("Rabbit", func() {
 
 				// Verify message attributes
 				for _, msg := range receivedMessages {
-					Expect(msg.Exchange).To(Equal(opts.ExchangeName))
-					Expect(msg.RoutingKey).To(Equal(opts.BindingKeys[0]))
+					Expect(msg.Exchange).To(Equal(opts.Bindings[0].ExchangeName))
+					Expect(msg.RoutingKey).To(Equal(opts.Bindings[0].BindingKeys[0]))
 					Expect(msg.ConsumerTag).To(Equal(opts.ConsumerTag))
 
 					data = append(data, string(msg.Body))
@@ -467,7 +467,7 @@ var _ = Describe("Rabbit", func() {
 				time.Sleep(25 * time.Millisecond)
 
 				testMessage := []byte(uuid.NewV4().String())
-				publishErr := r.Publish(nil, opts.BindingKeys[0], testMessage)
+				publishErr := r.Publish(nil, opts.Bindings[0].BindingKeys[0], testMessage)
 
 				Expect(publishErr).ToNot(HaveOccurred())
 
@@ -510,7 +510,7 @@ var _ = Describe("Rabbit", func() {
 				time.Sleep(25 * time.Millisecond)
 
 				testMessage := []byte(uuid.NewV4().String())
-				publishErr := r.Publish(nil, opts.BindingKeys[0], testMessage)
+				publishErr := r.Publish(nil, opts.Bindings[0].BindingKeys[0], testMessage)
 
 				Expect(publishErr).ToNot(HaveOccurred())
 
@@ -637,15 +637,66 @@ var _ = Describe("Rabbit", func() {
 				Expect(err.Error()).To(ContainSubstring("At least one non-empty URL must be provided"))
 			})
 
-			It("only checks ExchangeType if ExchangeDeclare is true", func() {
-				opts.ExchangeDeclare = false
-				opts.ExchangeType = ""
+			It("errors when no exchange is specified", func() {
+				opts.URLs = []string{
+					"amqp://whatever",
+				}
+				// empty/nil bindings
+				opts.Bindings = []Binding{}
+				err := ValidateOptions(opts)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("At least one Exchange must be specified"))
+			})
 
+			It("errors when multiple exchanges are specified in Producer/Both mode", func() {
+				opts.Bindings = []Binding{
+					Binding{
+						ExchangeName:    "exchange1",
+						ExchangeDeclare: false,
+						ExchangeType:    "",
+					},
+					Binding{
+						ExchangeName:    "exchange2",
+						ExchangeDeclare: false,
+						ExchangeType:    "",
+					},
+				}
+				opts.URLs = []string{
+					"amqp://whatever",
+				}
+
+				opts.Mode = Producer
+				err := ValidateOptions(opts)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("Exactly one Exchange must be specified when publishing messages"))
+
+				opts.Mode = Both
+				err = ValidateOptions(opts)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("Exactly one Exchange must be specified when publishing messages"))
+			})
+
+			It("only checks ExchangeType if ExchangeDeclare is true", func() {
+				opts.Bindings = []Binding{
+					Binding{
+						ExchangeName:    "exchange1",
+						ExchangeDeclare: false,
+						ExchangeType:    "",
+						BindingKeys: []string{
+							"routingeKey1",
+							"routingeKey2",
+						},
+					},
+				}
+				opts.URLs = []string{
+					"amqp://whatever",
+				}
+				opts.Mode = Consumer
 				err := ValidateOptions(opts)
 				Expect(err).ToNot(HaveOccurred())
 
-				opts.ExchangeDeclare = true
-				opts.ExchangeType = ""
+				opts.Bindings[0].ExchangeDeclare = true
+				opts.Bindings[0].ExchangeType = ""
 
 				err = ValidateOptions(opts)
 				Expect(err).To(HaveOccurred())
@@ -653,15 +704,29 @@ var _ = Describe("Rabbit", func() {
 			})
 
 			It("errors if ExchangeName is unset", func() {
-				opts.ExchangeName = ""
-
+				opts.Bindings = []Binding{
+					Binding{
+						ExchangeName: "",
+					},
+				}
+				opts.URLs = []string{
+					"amqp://whatever",
+				}
 				err := ValidateOptions(opts)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("ExchangeName cannot be empty"))
 			})
 
 			It("errors if BindingKeys is unset", func() {
-				opts.BindingKeys = []string{}
+				opts.Bindings = []Binding{
+					Binding{
+						ExchangeName: "exchange1",
+						BindingKeys:  []string{},
+					},
+				}
+				opts.URLs = []string{
+					"amqp://whatever",
+				}
 
 				err := ValidateOptions(opts)
 				Expect(err).To(HaveOccurred())
@@ -695,23 +760,27 @@ func generateOptions() *Options {
 	exchangeName := "rabbit-" + uuid.NewV4().String()
 
 	return &Options{
-		URLs:               []string{"amqp://localhost"},
-		QueueName:          "rabbit-" + uuid.NewV4().String(),
-		ExchangeName:       exchangeName,
-		ExchangeType:       "topic",
-		ExchangeDeclare:    true,
-		ExchangeDurable:    false,
-		ExchangeAutoDelete: true,
-		BindingKeys:        []string{exchangeName},
-		QosPrefetchCount:   0,
-		QosPrefetchSize:    0,
-		RetryReconnectSec:  10,
-		QueueDeclare:       true,
-		QueueDurable:       false,
-		QueueExclusive:     false,
-		QueueAutoDelete:    true,
-		AppID:              "rabbit-test-producer",
-		ConsumerTag:        "rabbit-test-consumer",
+		URLs:      []string{"amqp://localhost"},
+		QueueName: "rabbit-" + uuid.NewV4().String(),
+		Bindings: []Binding{
+			Binding{
+				ExchangeName:       exchangeName,
+				ExchangeType:       "topic",
+				ExchangeDeclare:    true,
+				ExchangeDurable:    false,
+				ExchangeAutoDelete: true,
+				BindingKeys:        []string{exchangeName},
+			},
+		},
+		QosPrefetchCount:  0,
+		QosPrefetchSize:   0,
+		RetryReconnectSec: 10,
+		QueueDeclare:      true,
+		QueueDurable:      false,
+		QueueExclusive:    false,
+		QueueAutoDelete:   true,
+		AppID:             "rabbit-test-producer",
+		ConsumerTag:       "rabbit-test-consumer",
 	}
 }
 
@@ -750,7 +819,7 @@ func connect(opts *Options) (*amqp.Channel, error) {
 
 func publishMessages(ch *amqp.Channel, opts *Options, messages []string) error {
 	for _, v := range messages {
-		if err := ch.Publish(opts.ExchangeName, opts.BindingKeys[0], false, false, amqp.Publishing{
+		if err := ch.Publish(opts.Bindings[0].ExchangeName, opts.Bindings[0].BindingKeys[0], false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			Body:         []byte(v),
 		}); err != nil {
@@ -775,7 +844,7 @@ func receiveMessage(ch *amqp.Channel, opts *Options) (*amqp.Delivery, error) {
 		return nil, errors.Wrap(err, "unable to declare queue")
 	}
 
-	if err := ch.QueueBind(tmpQueueName, opts.BindingKeys[0], opts.ExchangeName, false, nil); err != nil {
+	if err := ch.QueueBind(tmpQueueName, opts.Bindings[0].BindingKeys[0], opts.Bindings[0].ExchangeName, false, nil); err != nil {
 		return nil, errors.Wrap(err, "unable to bind queue")
 	}
 
