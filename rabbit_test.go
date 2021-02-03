@@ -586,7 +586,7 @@ var _ = Describe("Rabbit", func() {
 				})
 
 				Expect(err).To(HaveOccurred())
-				Expect(err).To(Equal(ShutdownError))
+				Expect(err).To(Equal(ErrShutdown))
 			})
 		})
 
@@ -598,7 +598,7 @@ var _ = Describe("Rabbit", func() {
 				err = r.Publish(nil, "messages", []byte("testing"))
 
 				Expect(err).To(HaveOccurred())
-				Expect(err).To(Equal(ShutdownError))
+				Expect(err).To(Equal(ErrShutdown))
 			})
 		})
 	})

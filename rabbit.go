@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	// How long to wait before attempting to reconnect to a rabbit server
+	// DefaultRetryReconnectSec determines how long to wait before attempting
+	// to reconnect to a rabbit server
 	DefaultRetryReconnectSec = 60
 
 	// Both means that the client is acting as both a consumer and a producer.
@@ -39,12 +40,14 @@ const (
 )
 
 var (
-	ShutdownError = errors.New("connection has been shutdown")
+	// ErrShutdown will be returned if the underlying connection has already
+	// been closed (ie. if you Close()'d and then tried to Publish())
+	ErrShutdown = errors.New("connection has been shutdown")
 
-	// Used for identifying consumer
+	// DefaultConsumerTag is used for identifying consumer
 	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
 
-	// Used for identifying producer
+	// DefaultAppID is used for identifying the producer
 	DefaultAppID = "p-rabbit-" + uuid.NewV4().String()[0:8]
 )
 
@@ -333,7 +336,7 @@ func validMode(mode Mode) error {
 // between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
 	if r.shutdown {
-		r.log.Error(ShutdownError)
+		r.log.Error(ErrShutdown)
 		return
 	}
 
@@ -396,7 +399,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 // or run `Stop()`.
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
 	if r.shutdown {
-		return ShutdownError
+		return ErrShutdown
 	}
 
 	if r.Options.Mode == Producer {
@@ -435,7 +438,7 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 // TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
 	if r.shutdown {
-		return ShutdownError
+		return ErrShutdown
 	}
 
 	if r.Options.Mode == Consumer {
