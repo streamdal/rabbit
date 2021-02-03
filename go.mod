@@ -3,6 +3,7 @@ module github.com/batchcorp/rabbit
 go 1.14
 
 require (
+	github.com/fzipp/gocyclo v0.3.1 // indirect
 	github.com/gordonklaus/ineffassign v0.0.0-20210104184537-8eed68eb605f // indirect
 	github.com/kr/pretty v0.2.0 // indirect
 	github.com/onsi/ginkgo v1.14.1

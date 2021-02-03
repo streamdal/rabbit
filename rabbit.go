@@ -251,6 +251,20 @@ func ValidateOptions(opts *Options) error {
 		return errors.New("At least one Exchange must be specified")
 	}
 
+	if err := validateBindings(opts); err != nil {
+		return errors.Wrap(err, "binding validation failed")
+	}
+
+	applyDefaults(opts)
+
+	if err := validMode(opts.Mode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateBindings(opts *Options) error {
 	if opts.Mode == Producer || opts.Mode == Both {
 		if len(opts.Bindings) > 1 {
 			return errors.New("Exactly one Exchange must be specified when publishing messages")
@@ -273,12 +287,6 @@ func ValidateOptions(opts *Options) error {
 				return errors.New("At least one BindingKeys must be specified")
 			}
 		}
-	}
-
-	applyDefaults(opts)
-
-	if err := validMode(opts.Mode); err != nil {
-		return err
 	}
 
 	return nil
@@ -563,7 +571,8 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		return nil, errors.Wrap(err, "unable to set qos policy")
 	}
 
-	if r.Options.Mode == Both || r.Options.Mode == Consumer {
+	// Only declare queue if in Both or Consumer mode
+	if r.Options.Mode != Producer {
 		if r.Options.QueueDeclare {
 			if _, err := ch.QueueDeclare(
 				r.Options.QueueName,
@@ -579,7 +588,6 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	}
 
 	for _, binding := range r.Options.Bindings {
-
 		if binding.ExchangeDeclare {
 			if err := ch.ExchangeDeclare(
 				binding.ExchangeName,
@@ -594,7 +602,8 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 			}
 		}
 
-		if r.Options.Mode == Both || r.Options.Mode == Consumer {
+		// Only bind queue if in Both or Consumer mode
+		if r.Options.Mode != Producer {
 			for _, bindingKey := range binding.BindingKeys {
 				if err := ch.QueueBind(
 					r.Options.QueueName,
