@@ -175,7 +175,6 @@ func New(opts *Options) (*Rabbit, error) {
 	// try all available URLs in a loop and quit as soon as it
 	// can successfully establish a connection to one of them
 	for _, url := range opts.URLs {
-		err = nil
 		if opts.UseTLS {
 			tlsConfig := &tls.Config{}
 
@@ -240,6 +239,7 @@ func ValidateOptions(opts *Options) error {
 			break
 		}
 	}
+
 	if !validURL {
 		return errors.New("At least one non-empty URL must be provided")
 	}
@@ -272,6 +272,20 @@ func ValidateOptions(opts *Options) error {
 		}
 	}
 
+	applyDefaults(opts)
+
+	if err := validMode(opts.Mode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func applyDefaults(opts *Options) {
+	if opts == nil {
+		return
+	}
+
 	if opts.RetryReconnectSec == 0 {
 		opts.RetryReconnectSec = DefaultRetryReconnectSec
 	}
@@ -283,19 +297,21 @@ func ValidateOptions(opts *Options) error {
 	if opts.ConsumerTag == "" {
 		opts.ConsumerTag = DefaultConsumerTag
 	}
+}
 
+func validMode(mode Mode) error {
 	validModes := []Mode{Both, Producer, Consumer}
 
 	var found bool
 
 	for _, validMode := range validModes {
-		if validMode == opts.Mode {
+		if validMode == mode {
 			found = true
 		}
 	}
 
 	if !found {
-		return fmt.Errorf("invalid mode '%d'", opts.Mode)
+		return fmt.Errorf("invalid mode '%d'", mode)
 	}
 
 	return nil
@@ -424,10 +440,6 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 
 	if r.Options.Mode == Consumer {
 		return errors.New("unable to Publish - library is configured in Consumer mode")
-	}
-
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	// Is this the first time we're publishing?
@@ -629,7 +641,6 @@ func (r *Rabbit) reconnect() error {
 	// try all available URLs in a loop and quit as soon as it
 	// can successfully establish a connection to one of them
 	for _, url := range r.Options.URLs {
-		err = nil
 		if r.Options.UseTLS {
 			tlsConfig := &tls.Config{}
 
@@ -649,7 +660,7 @@ func (r *Rabbit) reconnect() error {
 	}
 
 	if err != nil {
-		return err
+		return errors.Wrap(err, "all servers failed on reconnect")
 	}
 
 	r.Conn = ac
