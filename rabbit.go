@@ -27,7 +27,8 @@ import (
 )
 
 const (
-	// How long to wait before attempting to reconnect to a rabbit server
+	// DefaultRetryReconnectSec determines how long to wait before attempting
+	// to reconnect to a rabbit server
 	DefaultRetryReconnectSec = 60
 
 	// Both means that the client is acting as both a consumer and a producer.
@@ -39,12 +40,14 @@ const (
 )
 
 var (
-	ShutdownError = errors.New("connection has been shutdown")
+	// ErrShutdown will be returned if the underlying connection has already
+	// been closed (ie. if you Close()'d and then tried to Publish())
+	ErrShutdown = errors.New("connection has been shutdown")
 
-	// Used for identifying consumer
+	// DefaultConsumerTag is used for identifying consumer
 	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
 
-	// Used for identifying producer
+	// DefaultAppID is used for identifying the producer
 	DefaultAppID = "p-rabbit-" + uuid.NewV4().String()[0:8]
 )
 
@@ -175,7 +178,6 @@ func New(opts *Options) (*Rabbit, error) {
 	// try all available URLs in a loop and quit as soon as it
 	// can successfully establish a connection to one of them
 	for _, url := range opts.URLs {
-		err = nil
 		if opts.UseTLS {
 			tlsConfig := &tls.Config{}
 
@@ -240,6 +242,7 @@ func ValidateOptions(opts *Options) error {
 			break
 		}
 	}
+
 	if !validURL {
 		return errors.New("At least one non-empty URL must be provided")
 	}
@@ -248,6 +251,20 @@ func ValidateOptions(opts *Options) error {
 		return errors.New("At least one Exchange must be specified")
 	}
 
+	if err := validateBindings(opts); err != nil {
+		return errors.Wrap(err, "binding validation failed")
+	}
+
+	applyDefaults(opts)
+
+	if err := validMode(opts.Mode); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func validateBindings(opts *Options) error {
 	if opts.Mode == Producer || opts.Mode == Both {
 		if len(opts.Bindings) > 1 {
 			return errors.New("Exactly one Exchange must be specified when publishing messages")
@@ -272,6 +289,14 @@ func ValidateOptions(opts *Options) error {
 		}
 	}
 
+	return nil
+}
+
+func applyDefaults(opts *Options) {
+	if opts == nil {
+		return
+	}
+
 	if opts.RetryReconnectSec == 0 {
 		opts.RetryReconnectSec = DefaultRetryReconnectSec
 	}
@@ -283,19 +308,21 @@ func ValidateOptions(opts *Options) error {
 	if opts.ConsumerTag == "" {
 		opts.ConsumerTag = DefaultConsumerTag
 	}
+}
 
+func validMode(mode Mode) error {
 	validModes := []Mode{Both, Producer, Consumer}
 
 	var found bool
 
 	for _, validMode := range validModes {
-		if validMode == opts.Mode {
+		if validMode == mode {
 			found = true
 		}
 	}
 
 	if !found {
-		return fmt.Errorf("invalid mode '%d'", opts.Mode)
+		return fmt.Errorf("invalid mode '%d'", mode)
 	}
 
 	return nil
@@ -317,7 +344,7 @@ func ValidateOptions(opts *Options) error {
 // between attempts.
 func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
 	if r.shutdown {
-		r.log.Error(ShutdownError)
+		r.log.Error(ErrShutdown)
 		return
 	}
 
@@ -380,7 +407,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 // or run `Stop()`.
 func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
 	if r.shutdown {
-		return ShutdownError
+		return ErrShutdown
 	}
 
 	if r.Options.Mode == Producer {
@@ -419,15 +446,11 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 // TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
 	if r.shutdown {
-		return ShutdownError
+		return ErrShutdown
 	}
 
 	if r.Options.Mode == Consumer {
 		return errors.New("unable to Publish - library is configured in Consumer mode")
-	}
-
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	// Is this the first time we're publishing?
@@ -548,7 +571,8 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 		return nil, errors.Wrap(err, "unable to set qos policy")
 	}
 
-	if r.Options.Mode == Both || r.Options.Mode == Consumer {
+	// Only declare queue if in Both or Consumer mode
+	if r.Options.Mode != Producer {
 		if r.Options.QueueDeclare {
 			if _, err := ch.QueueDeclare(
 				r.Options.QueueName,
@@ -564,7 +588,6 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	}
 
 	for _, binding := range r.Options.Bindings {
-
 		if binding.ExchangeDeclare {
 			if err := ch.ExchangeDeclare(
 				binding.ExchangeName,
@@ -579,7 +602,8 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 			}
 		}
 
-		if r.Options.Mode == Both || r.Options.Mode == Consumer {
+		// Only bind queue if in Both or Consumer mode
+		if r.Options.Mode != Producer {
 			for _, bindingKey := range binding.BindingKeys {
 				if err := ch.QueueBind(
 					r.Options.QueueName,
@@ -629,7 +653,6 @@ func (r *Rabbit) reconnect() error {
 	// try all available URLs in a loop and quit as soon as it
 	// can successfully establish a connection to one of them
 	for _, url := range r.Options.URLs {
-		err = nil
 		if r.Options.UseTLS {
 			tlsConfig := &tls.Config{}
 
@@ -649,7 +672,7 @@ func (r *Rabbit) reconnect() error {
 	}
 
 	if err != nil {
-		return err
+		return errors.Wrap(err, "all servers failed on reconnect")
 	}
 
 	r.Conn = ac

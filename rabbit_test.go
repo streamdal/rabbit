@@ -586,7 +586,7 @@ var _ = Describe("Rabbit", func() {
 				})
 
 				Expect(err).To(HaveOccurred())
-				Expect(err).To(Equal(ShutdownError))
+				Expect(err).To(Equal(ErrShutdown))
 			})
 		})
 
@@ -598,7 +598,7 @@ var _ = Describe("Rabbit", func() {
 				err = r.Publish(nil, "messages", []byte("testing"))
 
 				Expect(err).To(HaveOccurred())
-				Expect(err).To(Equal(ShutdownError))
+				Expect(err).To(Equal(ErrShutdown))
 			})
 		})
 	})
@@ -650,12 +650,12 @@ var _ = Describe("Rabbit", func() {
 
 			It("errors when multiple exchanges are specified in Producer/Both mode", func() {
 				opts.Bindings = []Binding{
-					Binding{
+					{
 						ExchangeName:    "exchange1",
 						ExchangeDeclare: false,
 						ExchangeType:    "",
 					},
-					Binding{
+					{
 						ExchangeName:    "exchange2",
 						ExchangeDeclare: false,
 						ExchangeType:    "",
@@ -678,7 +678,7 @@ var _ = Describe("Rabbit", func() {
 
 			It("only checks ExchangeType if ExchangeDeclare is true", func() {
 				opts.Bindings = []Binding{
-					Binding{
+					{
 						ExchangeName:    "exchange1",
 						ExchangeDeclare: false,
 						ExchangeType:    "",
@@ -705,7 +705,7 @@ var _ = Describe("Rabbit", func() {
 
 			It("errors if ExchangeName is unset", func() {
 				opts.Bindings = []Binding{
-					Binding{
+					{
 						ExchangeName: "",
 					},
 				}
@@ -719,7 +719,7 @@ var _ = Describe("Rabbit", func() {
 
 			It("errors if BindingKeys is unset", func() {
 				opts.Bindings = []Binding{
-					Binding{
+					{
 						ExchangeName: "exchange1",
 						BindingKeys:  []string{},
 					},
@@ -763,7 +763,7 @@ func generateOptions() *Options {
 		URLs:      []string{"amqp://localhost"},
 		QueueName: "rabbit-" + uuid.NewV4().String(),
 		Bindings: []Binding{
-			Binding{
+			{
 				ExchangeName:       exchangeName,
 				ExchangeType:       "topic",
 				ExchangeDeclare:    true,
