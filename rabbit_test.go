@@ -5,13 +5,16 @@ package rabbit
 
 import (
 	"context"
+	"log"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
-	"github.com/sirupsen/logrus"
+	// to test with logrus, uncomment the following
+	// and the log initialiser in generateOptions()
+	// "github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 )
 
@@ -781,6 +784,7 @@ func generateOptions() *Options {
 		QueueAutoDelete:   true,
 		AppID:             "rabbit-test-producer",
 		ConsumerTag:       "rabbit-test-consumer",
+		//Log:               logrus.WithField("pkg", "rabbit"),
 	}
 }
 
@@ -855,10 +859,10 @@ func receiveMessage(ch *amqp.Channel, opts *Options) (*amqp.Delivery, error) {
 
 	select {
 	case m := <-deliveryChan:
-		logrus.Debug("Test: received message in receiveMessage()")
+		log.Println("Test: received message in receiveMessage()")
 		return &m, nil
 	case <-time.After(5 * time.Second):
-		logrus.Debug("Test: timed out waiting for message in receiveMessage()")
+		log.Println("Test: timed out waiting for message in receiveMessage()")
 		return nil, errors.New("timed out")
 	}
 }
