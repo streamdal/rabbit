@@ -22,7 +22,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
-	"github.com/sirupsen/logrus"
 	"github.com/streadway/amqp"
 )
 
@@ -76,7 +75,7 @@ type Rabbit struct {
 	shutdown bool
 	ctx      context.Context
 	cancel   func()
-	log      *logrus.Entry
+	log      Logger
 }
 
 // Mode is the type used to represent whether the RabbitMQ
@@ -157,6 +156,9 @@ type Options struct {
 
 	// Skip cert verification (only applies if UseTLS is true)
 	SkipVerifyTLS bool
+
+	// Log is the (optional) logger to use for writing out log messages.
+	Log Logger
 }
 
 // ConsumeError will be passed down the error channel if/when `f()` func runs
@@ -212,7 +214,7 @@ func New(opts *Options) (*Rabbit, error) {
 
 		ctx:    ctx,
 		cancel: cancel,
-		log:    logrus.WithField("pkg", "rabbit"),
+		log:    opts.Log,
 	}
 
 	if opts.Mode != Producer {
@@ -308,6 +310,10 @@ func applyDefaults(opts *Options) {
 	if opts.ConsumerTag == "" {
 		opts.ConsumerTag = DefaultConsumerTag
 	}
+
+	if opts.Log == nil {
+		opts.Log = &NoOpLogger{}
+	}
 }
 
 func validMode(mode Mode) error {
@@ -385,18 +391,17 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 				}
 			}
 		case <-ctx.Done():
-			r.log.Warning("stopped via context")
+			r.log.Warn("stopped via context")
 			r.ConsumeLooper.Quit()
 			quit = true
 		case <-r.ctx.Done():
-			r.log.Warning("stopped via Stop()")
+			r.log.Warn("stopped via Stop()")
 			r.ConsumeLooper.Quit()
 			quit = true
 		}
 
 		return nil
 	})
-
 	r.log.Debug("Consume finished - exiting")
 }
 
@@ -426,10 +431,10 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 			return err
 		}
 	case <-ctx.Done():
-		r.log.Warning("stopped via context")
+		r.log.Warn("stopped via context")
 		return nil
 	case <-r.ctx.Done():
-		r.log.Warning("stopped via Stop()")
+		r.log.Warn("stopped via Stop()")
 		return nil
 	}
 
@@ -516,13 +521,11 @@ func (r *Rabbit) watchNotifyClose() {
 
 		for {
 			attempts++
-
 			if err := r.reconnect(); err != nil {
-				r.log.Warningf("unable to complete reconnect: %s; retrying in %d", err, r.Options.RetryReconnectSec)
+				r.log.Warnf("unable to complete reconnect: %s; retrying in %d", err, r.Options.RetryReconnectSec)
 				time.Sleep(time.Duration(r.Options.RetryReconnectSec) * time.Second)
 				continue
 			}
-
 			r.log.Debugf("successfully reconnected after %d attempts", attempts)
 			break
 		}
@@ -535,14 +538,14 @@ func (r *Rabbit) watchNotifyClose() {
 		if r.Options.Mode == Producer {
 			serverChannel, err := r.newServerChannel()
 			if err != nil {
-				logrus.Errorf("unable to set new channel: %s", err)
+				r.log.Errorf("unable to set new channel: %s", err)
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
 			}
 
 			r.ProducerServerChannel = serverChannel
 		} else {
 			if err := r.newConsumerChannel(); err != nil {
-				logrus.Errorf("unable to set new channel: %s", err)
+				r.log.Errorf("unable to set new channel: %s", err)
 
 				// TODO: This is super shitty. Should address this.
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
@@ -552,7 +555,6 @@ func (r *Rabbit) watchNotifyClose() {
 		// Unlock so that consumers/producers can begin reading messages from a new channel
 		r.ConsumerRWMutex.Unlock()
 		r.ProducerRWMutex.Unlock()
-
 		r.log.Debug("watchNotifyClose has completed successfully")
 	}
 }
