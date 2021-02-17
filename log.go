@@ -19,3 +19,40 @@ type Logger interface {
 	// Errorf formats an error message using the given arguments and sends it to the logger.
 	Errorf(format string, args ...interface{})
 }
+
+// NoOpLogger is a do-nothing logger; it is used internally
+// as the default Logger when none is provided in the Options.
+type NoOpLogger struct {
+}
+
+// Debug is no-op implementation of Logger's Debug.
+func (l *NoOpLogger) Debug(args ...interface{}) {
+}
+
+// Debugf is no-op implementation of Logger's Debugf.
+func (l *NoOpLogger) Debugf(format string, args ...interface{}) {
+}
+
+// Info is no-op implementation of Logger's Info.
+func (l *NoOpLogger) Info(args ...interface{}) {
+}
+
+// Infof is no-op implementation of Logger's Infof.
+func (l *NoOpLogger) Infof(format string, args ...interface{}) {
+}
+
+// Warn is no-op implementation of Logger's Warn.
+func (l *NoOpLogger) Warn(args ...interface{}) {
+}
+
+// Warnf is no-op implementation of Logger's Warnf.
+func (l *NoOpLogger) Warnf(format string, args ...interface{}) {
+}
+
+// Error is no-op implementation of Logger's Error.
+func (l *NoOpLogger) Error(args ...interface{}) {
+}
+
+// Errorf is no-op implementation of Logger's Errorf.
+func (l *NoOpLogger) Errorf(format string, args ...interface{}) {
+}
