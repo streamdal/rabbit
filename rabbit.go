@@ -56,6 +56,7 @@ type IRabbit interface {
 	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
 	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
 	Publish(ctx context.Context, routingKey string, payload []byte) error
+	PublishWithConfig(ctx context.Context, routingKey string, msg amqp.Publishing) error
 	Stop() error
 	Close() error
 }
@@ -483,6 +484,39 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 
 	return nil
 }
+
+// PublishWithConfig allows specifying the full range of message options when publishing
+func (r *Rabbit) PublishWithConfig(ctx context.Context, routingKey string, msg amqp.Publishing) error {
+	if r.shutdown {
+		return ErrShutdown
+	}
+
+	if r.Options.Mode == Consumer {
+		return errors.New("unable to Publish - library is configured in Consumer mode")
+	}
+
+	// Is this the first time we're publishing?
+	if r.ProducerServerChannel == nil {
+		ch, err := r.newServerChannel()
+		if err != nil {
+			return errors.Wrap(err, "unable to create server channel")
+		}
+
+		r.ProducerRWMutex.Lock()
+		r.ProducerServerChannel = ch
+		r.ProducerRWMutex.Unlock()
+	}
+
+	r.ProducerRWMutex.RLock()
+	defer r.ProducerRWMutex.RUnlock()
+
+	if err := r.ProducerServerChannel.Publish(r.Options.Bindings[0].ExchangeName, routingKey, false, false, msg); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 
 // Stop stops an in-progress `Consume()` or `ConsumeOnce()`.
 func (r *Rabbit) Stop() error {
