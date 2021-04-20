@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
+
 	// to test with logrus, uncomment the following
 	// and the log initialiser in generateOptions()
 	// "github.com/sirupsen/logrus"
@@ -499,14 +500,6 @@ var _ = Describe("Rabbit", func() {
 
 		Context("context timeout", func() {
 			It("returns an error on context timeout", func() {
-
-				go func() {
-					var err error
-					_, err = receiveMessage(ch, opts)
-
-					Expect(err).ToNot(HaveOccurred())
-				}()
-
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
 
