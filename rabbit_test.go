@@ -497,6 +497,26 @@ var _ = Describe("Rabbit", func() {
 			})
 		})
 
+		Context("context timeout", func() {
+			It("returns an error on context timeout", func() {
+
+				go func() {
+					var err error
+					_, err = receiveMessage(ch, opts)
+
+					Expect(err).ToNot(HaveOccurred())
+				}()
+
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+
+				testMessage := []byte(uuid.NewV4().String())
+				publishErr := r.Publish(ctx, opts.Bindings[0].BindingKeys[0], testMessage)
+
+				Expect(publishErr).To(HaveOccurred())
+			})
+		})
+
 		When("producer server channel is nil", func() {
 			It("will generate a new server channel", func() {
 				r.ProducerServerChannel = nil
