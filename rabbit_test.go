@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
 	uuid "github.com/satori/go.uuid"
+
 	// to test with logrus, uncomment the following
 	// and the log initialiser in generateOptions()
 	// "github.com/sirupsen/logrus"
@@ -494,6 +495,18 @@ var _ = Describe("Rabbit", func() {
 					Expect(err).To(HaveOccurred())
 					Expect(err.Error()).To(ContainSubstring("library is configured in Consumer mode"))
 				})
+			})
+		})
+
+		Context("context timeout", func() {
+			It("returns an error on context timeout", func() {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+
+				testMessage := []byte(uuid.NewV4().String())
+				publishErr := r.Publish(ctx, opts.Bindings[0].BindingKeys[0], testMessage)
+
+				Expect(publishErr).To(HaveOccurred())
 			})
 		})
 

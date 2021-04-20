@@ -445,11 +445,11 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 
 // Publish publishes one message to the configured exchange, using the specified
 // routing key.
-//
-// NOTE: Context semantics are not implemented.
-//
-// TODO: Implement ctx usage
 func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	if r.shutdown {
 		return ErrShutdown
 	}
@@ -473,15 +473,37 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	r.ProducerRWMutex.RLock()
 	defer r.ProducerRWMutex.RUnlock()
 
-	if err := r.ProducerServerChannel.Publish(r.Options.Bindings[0].ExchangeName, routingKey, false, false, amqp.Publishing{
-		DeliveryMode: amqp.Persistent,
-		Body:         body,
-		AppId:        r.Options.AppID,
-	}); err != nil {
-		return err
-	}
+	// Create channels for error and done signals
+	chanErr := make(chan error)
+	chanDone := make(chan struct{})
+	go func() {
+		if err := r.ProducerServerChannel.Publish(r.Options.Bindings[0].ExchangeName, routingKey, false, false, amqp.Publishing{
+			DeliveryMode: amqp.Persistent,
+			Body:         body,
+			AppId:        r.Options.AppID,
+		}); err != nil {
+			// Signal there is an error
+			chanErr <- err
+		}
 
-	return nil
+		// Signal we are done
+		chanDone <- struct{}{}
+	}()
+
+	select {
+	case <-chanDone:
+		// We did it!
+		return nil
+	case err := <-chanErr:
+		return errors.Wrap(err, "failed to publish message")
+	case <-ctx.Done():
+		r.log.Warn("stopped via context")
+		err := r.ProducerServerChannel.Close()
+		if err != nil {
+			return errors.Wrap(err, "failed to close producer channel")
+		}
+		return errors.New("context cancelled")
+	}
 }
 
 // Stop stops an in-progress `Consume()` or `ConsumeOnce()`.
