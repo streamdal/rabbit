@@ -142,6 +142,10 @@ type Options struct {
 	// Whether to declare/create queue on connect; used only if QueueDeclare set to true
 	QueueDeclare bool
 
+	// Additional arguements to pass to the queue declaration or binding
+	// https://github.com/batchcorp/plumber/issues/210
+	QueueArgs map[string]interface{}
+
 	// Whether to automatically acknowledge consumed message(s)
 	AutoAck bool
 
@@ -313,6 +317,10 @@ func applyDefaults(opts *Options) {
 
 	if opts.Log == nil {
 		opts.Log = &NoOpLogger{}
+	}
+
+	if opts.QueueArgs == nil {
+		opts.QueueArgs = make(map[string]interface{})
 	}
 }
 
@@ -604,7 +612,7 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 				r.Options.QueueAutoDelete,
 				r.Options.QueueExclusive,
 				false,
-				nil,
+				r.Options.QueueArgs,
 			); err != nil {
 				return nil, err
 			}
@@ -634,7 +642,7 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 					bindingKey,
 					binding.ExchangeName,
 					false,
-					nil,
+					r.Options.QueueArgs,
 				); err != nil {
 					return nil, errors.Wrap(err, "unable to bind queue")
 				}
