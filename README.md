@@ -2,12 +2,15 @@ rabbit
 ======
 [![](https://godoc.org/github.com/batchcorp/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/batchcorp/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/batchcorp/rabbit)](https://goreportcard.com/report/github.com/batchcorp/rabbit)
 
-A RabbitMQ wrapper lib around [streadway/amqp](https://github.com/streadway/amqp) 
+A RabbitMQ wrapper lib around ~[streadway/amqp](https://github.com/streadway/amqp)~ [rabbitmq/amqp091-go](https://github.com/rabbitmq/amqp091-go) 
 with some bells and whistles.
+
+NOTE: `streadway/amqp` is no longer maintained and RabbitMQ team have forked `streadway/amqp` and created `rabbitmq/amqp091-go`. You can read about this change [here](https://github.com/streadway/amqp/issues/497). This library uses `rabbitmq/amqp091-go`.
 
 * Support for auto-reconnect
 * Support for context (ie. cancel/timeout)
 * Support for using multiple binding keys
+* Support Producer, Consumer or both modes
 
 # Motivation
 
