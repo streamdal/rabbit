@@ -16,7 +16,7 @@ import (
 	// to test with logrus, uncomment the following
 	// and the log initialiser in generateOptions()
 	// "github.com/sirupsen/logrus"
-	"github.com/streadway/amqp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 var _ = Describe("Rabbit", func() {

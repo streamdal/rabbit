@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
-	"github.com/streadway/amqp"
 )
 
 const (
@@ -79,7 +79,7 @@ type Rabbit struct {
 }
 
 // Mode is the type used to represent whether the RabbitMQ
-// cliens is acting as a consumer, a producer, or both.
+// clients is acting as a consumer, a producer, or both.
 type Mode int
 
 // Binding represents the information needed to bind a queue to
