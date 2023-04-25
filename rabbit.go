@@ -396,6 +396,9 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 							Error:   err,
 						}
 					}()
+
+					// Let's not kill CPU here
+					time.Sleep(time.Millisecond * 50)
 				}
 			}
 		case <-ctx.Done():
@@ -542,6 +545,13 @@ func (r *Rabbit) watchNotifyClose() {
 
 		r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
 
+		// Exit consumer looper until we've reconnected
+		var initConsumerLooper bool
+		if r.ConsumeLooper != nil {
+			r.ConsumeLooper.Quit()
+			initConsumerLooper = true
+		}
+
 		// Acquire mutex to pause all consumers/producers while we reconnect AND prevent
 		// access to the channel map
 		r.ConsumerRWMutex.Lock()
@@ -557,6 +567,11 @@ func (r *Rabbit) watchNotifyClose() {
 				continue
 			}
 			r.log.Debugf("successfully reconnected after %d attempts", attempts)
+
+			// Make new looper since we quit the one above
+			if initConsumerLooper {
+				r.ConsumeLooper = director.NewFreeLooper(director.FOREVER, make(chan error, 1))
+			}
 			break
 		}
 
