@@ -383,8 +383,10 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 			return nil
 		}
 
+		deliverCh := r.delivery()
+
 		select {
-		case msg := <-r.delivery():
+		case msg := <-deliverCh:
 			if err := f(msg); err != nil {
 				r.log.Debugf("error during consume: %s", err)
 
@@ -397,9 +399,10 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 						}
 					}()
 
-					// Let's not kill CPU here
-					time.Sleep(time.Millisecond * 50)
 				}
+
+				// Let's not kill CPU here
+				time.Sleep(time.Millisecond * 50)
 			}
 		case <-ctx.Done():
 			r.log.Warn("stopped via context")
@@ -541,9 +544,12 @@ func (r *Rabbit) Close() error {
 func (r *Rabbit) watchNotifyClose() {
 	// TODO: Use a looper here
 	for {
-		closeErr := <-r.NotifyCloseChan
-
-		r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
+		//select {
+		//case <-r.ctx.Done():
+		//	return
+		//case closeErr := <-r.NotifyCloseChan:
+		//	r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
+		//}
 
 		// Exit consumer looper until we've reconnected
 		var initConsumerLooper bool
@@ -593,6 +599,7 @@ func (r *Rabbit) watchNotifyClose() {
 
 			// Make new looper since we quit the one above
 			if initConsumerLooper {
+				r.log.Debug("reinitializing consumer looper")
 				r.ConsumeLooper = director.NewFreeLooper(director.FOREVER, make(chan error, 1))
 			}
 		}
