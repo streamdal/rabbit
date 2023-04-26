@@ -567,11 +567,6 @@ func (r *Rabbit) watchNotifyClose() {
 				continue
 			}
 			r.log.Debugf("successfully reconnected after %d attempts", attempts)
-
-			// Make new looper since we quit the one above
-			if initConsumerLooper {
-				r.ConsumeLooper = director.NewFreeLooper(director.FOREVER, make(chan error, 1))
-			}
 			break
 		}
 
@@ -594,6 +589,11 @@ func (r *Rabbit) watchNotifyClose() {
 
 				// TODO: This is super shitty. Should address this.
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
+			}
+
+			// Make new looper since we quit the one above
+			if initConsumerLooper {
+				r.ConsumeLooper = director.NewFreeLooper(director.FOREVER, make(chan error, 1))
 			}
 		}
 
