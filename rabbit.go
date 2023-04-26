@@ -223,7 +223,7 @@ func New(opts *Options) (*Rabbit, error) {
 	}
 
 	if opts.Mode != Producer {
-		if err := r.newConsumerChannel(); err != nil {
+		if err := r.newConsumerChannel(0); err != nil {
 			return nil, errors.Wrap(err, "unable to get initial delivery channel")
 		}
 	}
@@ -582,7 +582,14 @@ func (r *Rabbit) watchNotifyClose() {
 
 			r.ProducerServerChannel = serverChannel
 		} else {
-			if err := r.newConsumerChannel(); err != nil {
+			// In the event of a reconnect from the lost of a node,
+			// we need to allow rabbit cluster time to sort itself out.
+			var waitTime time.Duration
+			if r.Options.QueueDeclare {
+				waitTime = time.Second * 10
+			}
+
+			if err := r.newConsumerChannel(waitTime); err != nil {
 				r.log.Errorf("unable to set new channel: %s", err)
 
 				// TODO: This is super shitty. Should address this.
@@ -663,11 +670,13 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	return ch, nil
 }
 
-func (r *Rabbit) newConsumerChannel() error {
+func (r *Rabbit) newConsumerChannel(waitTime time.Duration) error {
 	serverChannel, err := r.newServerChannel()
 	if err != nil {
 		return errors.Wrap(err, "unable to create new server channel")
 	}
+
+	time.Sleep(waitTime)
 
 	deliveryChannel, err := serverChannel.Consume(
 		r.Options.QueueName,
