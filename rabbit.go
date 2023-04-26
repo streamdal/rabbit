@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -222,7 +223,7 @@ func New(opts *Options) (*Rabbit, error) {
 	}
 
 	if opts.Mode != Producer {
-		if err := r.newConsumerChannel(); err != nil {
+		if err := r.newConsumerChannel(0); err != nil {
 			return nil, errors.Wrap(err, "unable to get initial delivery channel")
 		}
 	}
@@ -386,6 +387,13 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 		select {
 		case msg := <-r.delivery():
 			if err := f(msg); err != nil {
+				if strings.Contains(err.Error(), "delivery not initialized") {
+					// Connection has been lost, sleep for a bit to wait for reconnect goroutine to kick in
+					// and do not spam logs with the error
+					// TODO: there is probably a better way to handle this
+					time.Sleep(time.Second)
+					return nil
+				}
 				r.log.Debugf("error during consume: %s", err)
 
 				if errChan != nil {
@@ -574,12 +582,21 @@ func (r *Rabbit) watchNotifyClose() {
 
 			r.ProducerServerChannel = serverChannel
 		} else {
-			if err := r.newConsumerChannel(); err != nil {
+			// In the event of a reconnect from the lost of a node,
+			// we need to allow rabbit cluster time to sort itself out.
+			var waitTime time.Duration
+			if r.Options.QueueDeclare {
+				waitTime = time.Second * 10
+			}
+
+			if err := r.newConsumerChannel(waitTime); err != nil {
 				r.log.Errorf("unable to set new channel: %s", err)
 
 				// TODO: This is super shitty. Should address this.
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
 			}
+
+			r.log.Debug("successfully set new consumer channel")
 		}
 
 		// Unlock so that consumers/producers can begin reading messages from a new channel
@@ -653,11 +670,13 @@ func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
 	return ch, nil
 }
 
-func (r *Rabbit) newConsumerChannel() error {
+func (r *Rabbit) newConsumerChannel(waitTime time.Duration) error {
 	serverChannel, err := r.newServerChannel()
 	if err != nil {
 		return errors.Wrap(err, "unable to create new server channel")
 	}
+
+	time.Sleep(waitTime)
 
 	deliveryChannel, err := serverChannel.Consume(
 		r.Options.QueueName,
