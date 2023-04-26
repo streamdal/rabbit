@@ -588,6 +588,8 @@ func (r *Rabbit) watchNotifyClose() {
 				// TODO: This is super shitty. Should address this.
 				panic(fmt.Sprintf("unable to set new channel: %s", err))
 			}
+
+			r.log.Debug("successfully set new consumer channel"")
 		}
 
 		// Unlock so that consumers/producers can begin reading messages from a new channel
