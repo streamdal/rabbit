@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -386,6 +387,13 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 		select {
 		case msg := <-r.delivery():
 			if err := f(msg); err != nil {
+				if strings.Contains(err.Error(), "delivery not initialized") {
+					// Connection has been lost, sleep for a bit to wait for reconnect goroutine to kick in
+					// and do not spam logs with the error
+					// TODO: there is probably a better way to handle this
+					time.Sleep(time.Second)
+					return nil
+				}
 				r.log.Debugf("error during consume: %s", err)
 
 				if errChan != nil {
