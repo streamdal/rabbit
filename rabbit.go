@@ -542,14 +542,15 @@ func (r *Rabbit) Close() error {
 }
 
 func (r *Rabbit) watchNotifyClose() {
+
 	// TODO: Use a looper here
 	for {
-		//select {
-		//case <-r.ctx.Done():
-		//	return
-		//case closeErr := <-r.NotifyCloseChan:
-		//	r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
-		//}
+		select {
+		case <-r.ctx.Done():
+			return
+		case closeErr := <-r.NotifyCloseChan:
+			r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
+		}
 
 		// Exit consumer looper until we've reconnected
 		var initConsumerLooper bool
