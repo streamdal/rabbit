@@ -1,6 +1,6 @@
 rabbit
 ======
-[![](https://godoc.org/github.com/streamdal/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/streamdal/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/streamdal/rabbit)](https://goreportcard.com/report/github.com/streamdal/rabbit)
+[![](https://godoc.org/github.com/streamdal/rabbit?status.svg)](http://godoc.org/github.com/streamdal/rabbit) [![Master build status](https://github.com/streamdal/rabbit/workflows/main/badge.svg)](https://github.com/streamdal/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/streamdal/rabbit)](https://goreportcard.com/report/github.com/streamdal/rabbit)
 
 A RabbitMQ wrapper lib around ~[streadway/amqp](https://github.com/streadway/amqp)~ [rabbitmq/amqp091-go](https://github.com/rabbitmq/amqp091-go) 
 with some bells and whistles.

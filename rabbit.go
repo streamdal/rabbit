@@ -142,8 +142,8 @@ type Options struct {
 	// Whether to declare/create queue on connect; used only if QueueDeclare set to true
 	QueueDeclare bool
 
-	// Additional arguements to pass to the queue declaration or binding
-	// https://github.com/batchcorp/plumber/issues/210
+	// Additional arguments to pass to the queue declaration or binding
+	// https://github.com/streamdal/plumber/issues/210
 	QueueArgs map[string]interface{}
 
 	// Whether to automatically acknowledge consumed message(s)
