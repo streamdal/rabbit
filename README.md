@@ -1,6 +1,6 @@
 rabbit
 ======
-[![](https://godoc.org/github.com/batchcorp/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/batchcorp/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/batchcorp/rabbit)](https://goreportcard.com/report/github.com/batchcorp/rabbit)
+[![](https://godoc.org/github.com/streamdal/rabbit?status.svg)](http://godoc.org/github.com/batchcorp/rabbit) [![Master build status](https://github.com/streamdal/rabbit/workflows/main/badge.svg)](https://github.com/batchcorp/rabbit/actions) [![Go Report Card](https://goreportcard.com/badge/github.com/streamdal/rabbit)](https://goreportcard.com/report/github.com/streamdal/rabbit)
 
 A RabbitMQ wrapper lib around ~[streadway/amqp](https://github.com/streadway/amqp)~ [rabbitmq/amqp091-go](https://github.com/rabbitmq/amqp091-go) 
 with some bells and whistles.
@@ -14,9 +14,9 @@ NOTE: `streadway/amqp` is no longer maintained and RabbitMQ team have forked `st
 
 # Motivation
 
-We (Batch), make heavy use of RabbitMQ - we use it as the primary method for
-facilitating inter-service communication. Due to this, all services make use of
-RabbitMQ and are both publishers and consumers.
+We (Streamdal, formerly Batch.sh), make heavy use of RabbitMQ - we use it as 
+the primary method for facilitating inter-service communication. Due to this, 
+all services make use of RabbitMQ and are both publishers and consumers.
 
 We wrote this lib to ensure that all of our services make use of Rabbit in a
 consistent, predictable way AND are able to survive network blips.
@@ -32,7 +32,7 @@ import (
     "fmt"
     "log"  
 
-    "github.com/batchcorp/rabbit"
+    "github.com/streamdal/rabbit"
 )
 
 func main() { 
