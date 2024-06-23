@@ -6,11 +6,13 @@ package rabbit
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
+	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
 
 	// to test with logrus, uncomment the following
@@ -767,6 +769,88 @@ var _ = Describe("Rabbit", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(opts.ConsumerTag).To(ContainSubstring("c-rabbit-"))
 				Expect(opts.AppID).To(ContainSubstring("p-rabbit-"))
+			})
+		})
+	})
+
+	Describe("Reconnect testing", func() {
+		When("runWatcher receives reconnect signal", func() {
+			It("performs a reconnect", func() {
+
+			})
+		})
+
+		When("runWatcher receives a notify close signal", func() {
+			It("performs a reconnect", func() {
+
+			})
+		})
+
+		When("consumer receives amqp.Delivery with nil acknowledger", func() {
+			It("will send reconnect signal to ReconnectChan + send err to errCh", func() {
+				// Create our own rabbit instance with mock delivery channel
+				ctx, cancel := context.WithCancel(context.Background())
+
+				ac, err := amqp.Dial(opts.URLs[0])
+				Expect(err).ToNot(HaveOccurred())
+				notifyCloseCh := make(chan *amqp.Error)
+				reconnectCh := make(chan struct{}, 1)
+				deliveryCh := make(chan amqp.Delivery, 1)
+				errCh := make(chan *ConsumeError, 1)
+
+				r := &Rabbit{
+					Conn:                    ac,
+					ConsumerRWMutex:         &sync.RWMutex{},
+					NotifyCloseChan:         notifyCloseCh,
+					ReconnectChan:           reconnectCh,
+					ConsumerDeliveryChannel: deliveryCh,
+					ReconnectInProgressMtx:  &sync.RWMutex{},
+					ProducerRWMutex:         &sync.RWMutex{},
+					ConsumeLooper:           director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
+					Options:                 opts,
+
+					log:    &NoOpLogger{},
+					ctx:    ctx,
+					cancel: cancel,
+				}
+
+				receivedMessage := false
+
+				// Listen for exactly one message
+				go func() {
+					r.Consume(ctx, errCh, func(msg amqp.Delivery) error {
+						receivedMessage = true
+						return nil
+					})
+				}()
+
+				// Write message to delivery channel
+				deliveryCh <- amqp.Delivery{
+					Acknowledger: nil,
+					MessageId:    "reconnect-test-id-123",
+					Timestamp:    time.Now(),
+					ConsumerTag:  "reconnect-test",
+					Exchange:     "fake-exchange",
+					RoutingKey:   "fake-routing-key",
+					Body:         []byte("foo"),
+				}
+
+				go func() {
+					defer GinkgoRecover()
+
+					consumeErr := <-errCh
+					Expect(consumeErr).ToNot(BeNil())
+					Expect(consumeErr.Error.Error()).To(ContainSubstring("nil acknowledger detected - sending reconnect signal"))
+				}()
+
+				// Give consume error goroutine enough time to start up
+				time.Sleep(time.Second)
+
+				Eventually(reconnectCh).Should(Receive())
+				Eventually(notifyCloseCh).ShouldNot(Receive())
+
+				// Consume func should NOT be executed (library should treat as error)
+				Eventually(receivedMessage).Should(BeFalse())
 			})
 		})
 	})
