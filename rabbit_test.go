@@ -14,7 +14,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
-
 	// to test with logrus, uncomment the following
 	// and the log initialiser in generateOptions()
 	// "github.com/sirupsen/logrus"
@@ -776,13 +775,13 @@ var _ = Describe("Rabbit", func() {
 	Describe("Reconnect testing", func() {
 		When("runWatcher receives reconnect signal", func() {
 			It("performs a reconnect", func() {
-
+				// TODO: Implement
 			})
 		})
 
 		When("runWatcher receives a notify close signal", func() {
 			It("performs a reconnect", func() {
-
+				// TODO: Implement
 			})
 		})
 

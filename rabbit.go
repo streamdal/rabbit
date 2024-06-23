@@ -499,7 +499,7 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 
 // Publish publishes one message to the configured exchange, using the specified
 // routing key.
-func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) error {
+func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte, headers ...amqp.Table) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -530,11 +530,19 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte) er
 	// Create channels for error and done signals
 	chanErr := make(chan error)
 	chanDone := make(chan struct{})
+
 	go func() {
+		var realHeaders amqp.Table
+
+		if len(headers) > 0 {
+			realHeaders = headers[0]
+		}
+
 		if err := r.ProducerServerChannel.Publish(r.Options.Bindings[0].ExchangeName, routingKey, false, false, amqp.Publishing{
 			DeliveryMode: amqp.Persistent,
 			Body:         body,
 			AppId:        r.Options.AppID,
+			Headers:      realHeaders,
 		}); err != nil {
 			// Signal there is an error
 			chanErr <- err
