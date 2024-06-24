@@ -57,7 +57,7 @@ var (
 type IRabbit interface {
 	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
 	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
-	Publish(ctx context.Context, routingKey string, payload []byte) error
+	Publish(ctx context.Context, routingKey string, payload []byte, headers ...amqp.Table) error
 	Stop() error
 	Close() error
 }
