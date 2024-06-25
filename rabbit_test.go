@@ -12,7 +12,6 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/pkg/errors"
-	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
 	// to test with logrus, uncomment the following
 	// and the log initialiser in generateOptions()
@@ -102,7 +101,6 @@ var _ = Describe("Rabbit", func() {
 				Expect(r.ConsumerRWMutex).ToNot(BeNil())
 				Expect(r.NotifyCloseChan).ToNot(BeNil())
 				Expect(r.ProducerRWMutex).ToNot(BeNil())
-				Expect(r.ConsumeLooper).ToNot(BeNil())
 				Expect(r.Options).ToNot(BeNil())
 			})
 
@@ -800,12 +798,12 @@ var _ = Describe("Rabbit", func() {
 				r := &Rabbit{
 					Conn:                    ac,
 					ConsumerRWMutex:         &sync.RWMutex{},
+					ConsumerWG:              &sync.WaitGroup{},
 					NotifyCloseChan:         notifyCloseCh,
 					ReconnectChan:           reconnectCh,
 					ConsumerDeliveryChannel: deliveryCh,
 					ReconnectInProgressMtx:  &sync.RWMutex{},
 					ProducerRWMutex:         &sync.RWMutex{},
-					ConsumeLooper:           director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
 					Options:                 opts,
 
 					log:    &NoOpLogger{},
