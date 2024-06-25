@@ -21,7 +21,6 @@ import (
 
 	"github.com/pkg/errors"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/relistan/go-director"
 	uuid "github.com/satori/go.uuid"
 )
 
@@ -74,7 +73,6 @@ type Rabbit struct {
 	ReconnectInProgressMtx  *sync.RWMutex
 	ProducerServerChannel   *amqp.Channel
 	ProducerRWMutex         *sync.RWMutex
-	ConsumeLooper           director.Looper
 	Options                 *Options
 
 	shutdown bool
@@ -221,7 +219,6 @@ func New(opts *Options) (*Rabbit, error) {
 		ReconnectInProgress:    false,
 		ReconnectInProgressMtx: &sync.RWMutex{},
 		ProducerRWMutex:        &sync.RWMutex{},
-		ConsumeLooper:          director.NewFreeLooper(director.FOREVER, make(chan error, 1)),
 		Options:                opts,
 
 		ctx:    ctx,
@@ -381,16 +378,8 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 	r.log.Debug("waiting for messages from rabbit ...")
 
-	var quit bool
-
-	r.ConsumeLooper.Loop(func() error {
-		// This is needed to prevent context flood in case .Quit() wasn't picked
-		// up quickly enough by director
-		if quit {
-			time.Sleep(25 * time.Millisecond)
-			return nil
-		}
-
+MAIN:
+	for {
 		select {
 		case msg := <-r.delivery():
 			if _, ok := msg.Headers[ForceReconnectHeader]; ok || msg.Acknowledger == nil {
@@ -403,7 +392,7 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 				// No point in continuing execution of consumer func as the
 				// delivery msg is incomplete/invalid.
-				return nil
+				continue
 			}
 
 			if err := f(msg); err != nil {
@@ -414,16 +403,13 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 			}
 		case <-ctx.Done():
 			r.log.Warn("stopped via context")
-			r.ConsumeLooper.Quit()
-			quit = true
+			break MAIN
 		case <-r.ctx.Done():
 			r.log.Warn("stopped via Stop()")
-			r.ConsumeLooper.Quit()
-			quit = true
+			break MAIN
 		}
+	}
 
-		return nil
-	})
 	r.log.Debug("Consume finished - exiting")
 }
 
