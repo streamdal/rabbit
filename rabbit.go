@@ -29,6 +29,10 @@ const (
 	// to reconnect to a rabbit server
 	DefaultRetryReconnectSec = 60
 
+	// DefaultStopTimeout is the default amount of time Stop() will wait for
+	// consume function(s) to exit.
+	DefaultStopTimeout = 5 * time.Second
+
 	// Both means that the client is acting as both a consumer and a producer.
 	Both Mode = 0
 	// Consumer means that the client is acting as a consumer.
@@ -40,9 +44,8 @@ const (
 )
 
 var (
-	// ErrShutdown will be returned if the underlying connection has already
-	// been closed (ie. if you Close()'d and then tried to Publish())
-	ErrShutdown = errors.New("connection has been shutdown")
+	// ErrShutdown will be returned if the client is shutdown via Stop() or Close()
+	ErrShutdown = errors.New("client is shutdown")
 
 	// DefaultConsumerTag is used for identifying consumer
 	DefaultConsumerTag = "c-rabbit-" + uuid.NewV4().String()[0:8]
@@ -57,7 +60,7 @@ type IRabbit interface {
 	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
 	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
 	Publish(ctx context.Context, routingKey string, payload []byte, headers ...amqp.Table) error
-	Stop() error
+	Stop(timeout ...time.Duration) error
 	Close() error
 }
 
@@ -67,6 +70,7 @@ type Rabbit struct {
 	Conn                    *amqp.Connection
 	ConsumerDeliveryChannel <-chan amqp.Delivery
 	ConsumerRWMutex         *sync.RWMutex
+	ConsumerWG              *sync.WaitGroup
 	NotifyCloseChan         chan *amqp.Error
 	ReconnectChan           chan struct{}
 	ReconnectInProgress     bool
@@ -214,6 +218,7 @@ func New(opts *Options) (*Rabbit, error) {
 	r := &Rabbit{
 		Conn:                   ac,
 		ConsumerRWMutex:        &sync.RWMutex{},
+		ConsumerWG:             &sync.WaitGroup{},
 		NotifyCloseChan:        make(chan *amqp.Error),
 		ReconnectChan:          make(chan struct{}, 1),
 		ReconnectInProgress:    false,
@@ -371,6 +376,9 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 		r.log.Error("unable to Consume() - library is configured in Producer mode")
 		return
 	}
+
+	r.ConsumerWG.Add(1)
+	defer r.ConsumerWG.Done()
 
 	if ctx == nil {
 		ctx = context.Background()
@@ -554,16 +562,40 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte, he
 	}
 }
 
-// Stop stops an in-progress `Consume()` or `ConsumeOnce()`.
-func (r *Rabbit) Stop() error {
+// Stop stops an in-progress `Consume()` or `ConsumeOnce()`
+func (r *Rabbit) Stop(timeout ...time.Duration) error {
 	r.cancel()
-	return nil
+
+	doneCh := make(chan struct{})
+
+	// This will leak if consumer(s) don't exit within timeout
+	go func() {
+		r.ConsumerWG.Wait()
+		doneCh <- struct{}{}
+	}()
+
+	stopTimeout := DefaultStopTimeout
+
+	if len(timeout) > 0 {
+		stopTimeout = timeout[0]
+	}
+
+	select {
+	case <-doneCh:
+		return nil
+	case <-time.After(stopTimeout):
+		return fmt.Errorf("timeout waiting for consumer to stop after '%v'", stopTimeout)
+	}
 }
 
 // Close stops any active Consume and closes the amqp connection (and channels using the conn)
 //
 // You should re-instantiate the rabbit lib once this is called.
 func (r *Rabbit) Close() error {
+	if r.shutdown {
+		return ErrShutdown
+	}
+
 	r.cancel()
 
 	if err := r.Conn.Close(); err != nil {

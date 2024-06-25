@@ -798,6 +798,7 @@ var _ = Describe("Rabbit", func() {
 				r := &Rabbit{
 					Conn:                    ac,
 					ConsumerRWMutex:         &sync.RWMutex{},
+					ConsumerWG:              &sync.WaitGroup{},
 					NotifyCloseChan:         notifyCloseCh,
 					ReconnectChan:           reconnectCh,
 					ConsumerDeliveryChannel: deliveryCh,
