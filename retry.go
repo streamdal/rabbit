@@ -10,7 +10,7 @@ const RetryUnlimited = -1
 type RetryPolicy struct {
 	DelayMS     []time.Duration
 	MaxAttempts int
-	RetryCount  int
+	RetryCount  int // Default: unlimited (-1)
 }
 
 // DefaultAckPolicy is the default backoff policy for acknowledging messages.

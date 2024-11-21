@@ -57,8 +57,8 @@ var (
 // IRabbit is the interface that the `rabbit` library implements. It's here as
 // convenience.
 type IRabbit interface {
-	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error)
-	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error
+	Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error, rp ...*RetryPolicy)
+	ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error, rp ...*RetryPolicy) error
 	Publish(ctx context.Context, routingKey string, payload []byte, headers ...amqp.Table) error
 	Stop(timeout ...time.Duration) error
 	Close() error
@@ -440,10 +440,10 @@ MAIN:
 				break
 			}
 		case <-ctx.Done():
-			r.log.Warn("stopped via context")
+			r.log.Warn("Consume stopped via local context")
 			break MAIN
 		case <-r.ctx.Done():
-			r.log.Warn("stopped via Stop()")
+			r.log.Warn("Consume stopped via global context")
 			break MAIN
 		}
 	}
@@ -532,11 +532,11 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 			break
 		}
 	case <-ctx.Done():
-		r.log.Warn("ConsumeOnce stopped via context")
+		r.log.Warn("ConsumeOnce stopped via local context")
 
 		return nil
 	case <-r.ctx.Done():
-		r.log.Warn("ConsumeOnce stopped via Stop()")
+		r.log.Warn("ConsumeOnce stopped via global context")
 		return nil
 	}
 
