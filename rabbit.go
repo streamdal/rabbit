@@ -366,7 +366,12 @@ func validMode(mode Mode) error {
 // If the server goes away, `Consume` will automatically attempt to reconnect.
 // Subsequent reconnect attempts will sleep/wait for `DefaultRetryReconnectSec`
 // between attempts.
-func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error) {
+func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func(msg amqp.Delivery) error, rp ...*RetryPolicy) {
+	var retry *RetryPolicy
+	if len(rp) > 0 {
+		retry = rp[0]
+	}
+
 	if r.shutdown {
 		r.log.Error(ErrShutdown)
 		return
@@ -386,6 +391,8 @@ func (r *Rabbit) Consume(ctx context.Context, errChan chan *ConsumeError, f func
 
 	r.log.Debug("waiting for messages from rabbit ...")
 
+	var retries int
+
 MAIN:
 	for {
 		select {
@@ -403,11 +410,34 @@ MAIN:
 				continue
 			}
 
-			if err := f(msg); err != nil {
-				r.writeError(errChan, &ConsumeError{
-					Message: &msg,
-					Error:   fmt.Errorf("error during consume: %s", err),
-				})
+		RETRY:
+			for {
+				if err := f(msg); err != nil {
+					if retry != nil && retry.ShouldRetry() {
+						dur := retry.Duration(retries)
+
+						r.writeError(errChan, &ConsumeError{
+							Message: &msg,
+							Error:   fmt.Errorf("[Retry %s] error during consume: %s", retry.AttemptCount(), err),
+						})
+
+						time.Sleep(dur)
+						retries++
+						continue RETRY
+					}
+
+					r.writeError(errChan, &ConsumeError{
+						Message: &msg,
+						Error:   fmt.Errorf("error during consume: %s", err),
+					})
+
+					// We're not retrying here, break out of retry loop and return
+					// control flow to MAIN's loop
+					break
+				}
+
+				// Exit retry loop on success
+				break
 			}
 		case <-ctx.Done():
 			r.log.Warn("stopped via context")
@@ -450,7 +480,12 @@ func (r *Rabbit) writeError(errChan chan *ConsumeError, err *ConsumeError) {
 //
 // Same as with `Consume()`, you can pass in a context to cancel `ConsumeOnce()`
 // or run `Stop()`.
-func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error) error {
+func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery) error, rp ...*RetryPolicy) error {
+	var retry *RetryPolicy
+	if len(rp) > 0 {
+		retry = rp[0]
+	}
+
 	if r.shutdown {
 		return ErrShutdown
 	}
@@ -465,6 +500,8 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 
 	r.log.Debug("waiting for a single message from rabbit ...")
 
+	var retries int
+
 	select {
 	case msg := <-r.delivery():
 		if msg.Acknowledger == nil {
@@ -475,14 +512,31 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 			return errors.New("detected nil acknowledger - sent signal to reconnect to RabbitMQ")
 		}
 
-		if err := runFunc(msg); err != nil {
-			return err
+	RETRY:
+		for {
+			if err := runFunc(msg); err != nil {
+				if retry != nil && retry.ShouldRetry() {
+					dur := retry.Duration(retries)
+
+					r.log.Warnf("[Retry %s] error during consume: %s", retry.AttemptCount(), err)
+
+					time.Sleep(dur)
+					retries++
+					continue RETRY
+				}
+
+				r.log.Debug("ConsumeOnce finished - exiting")
+				return err
+			}
+
+			break
 		}
 	case <-ctx.Done():
-		r.log.Warn("stopped via context")
+		r.log.Warn("ConsumeOnce stopped via context")
+
 		return nil
 	case <-r.ctx.Done():
-		r.log.Warn("stopped via Stop()")
+		r.log.Warn("ConsumeOnce stopped via Stop()")
 		return nil
 	}
 
