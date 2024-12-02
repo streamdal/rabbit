@@ -81,3 +81,29 @@ func main() {
     cancel()
 }
 ```
+
+### Retry Policies
+
+You can specify a retry policy for the consumer.
+A pre-made ACK retry policy is available in the library at `rp := rabbit.DefaultAckPolicy()`. This policy will retry
+acknowledgement unlimited times
+
+You can also create a new policy using the `rabbit.NewRetryPolicy(maxAttempts, time.Millisecond * 200, time.Second, ...)` function.
+
+The retry policy can then be passed to consume functions as an argument:
+
+```go
+consumeFunc := func(msg amqp.Delivery) error {
+    fmt.Printf("Received new message: %+v\n", msg)
+    
+    numReceived++
+    
+    if numReceived > 1 {
+            r.Stop()
+        }
+    }
+
+rp := rabbit.DefaultAckPolicy()
+
+r.Consume(ctx, nil, consumeFunc, rp)
+```

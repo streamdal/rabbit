@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@main
       - name: Start up dependencies
-        run: docker-compose up -d
+        run: docker compose up -d
       - name: Wait for dependencies to start up
         uses: jakejarvis/wait-action@master
         with:
