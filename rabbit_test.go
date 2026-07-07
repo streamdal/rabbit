@@ -6,6 +6,7 @@ package rabbit
 import (
 	"context"
 	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -18,6 +19,65 @@ import (
 	// "github.com/sirupsen/logrus"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+// recordingLogger counts warn/error log calls; used for verifying reconnect
+// logging behavior
+type recordingLogger struct {
+	mtx        *sync.Mutex
+	warnCount  int
+	errorCount int
+}
+
+func newRecordingLogger() *recordingLogger {
+	return &recordingLogger{mtx: &sync.Mutex{}}
+}
+
+func (l *recordingLogger) Debug(args ...interface{})                 {}
+func (l *recordingLogger) Debugf(format string, args ...interface{}) {}
+func (l *recordingLogger) Info(args ...interface{})                  {}
+func (l *recordingLogger) Infof(format string, args ...interface{})  {}
+
+func (l *recordingLogger) Warn(args ...interface{}) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	l.warnCount++
+}
+
+func (l *recordingLogger) Warnf(format string, args ...interface{}) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	l.warnCount++
+}
+
+func (l *recordingLogger) Error(args ...interface{}) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	l.errorCount++
+}
+
+func (l *recordingLogger) Errorf(format string, args ...interface{}) {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	l.errorCount++
+}
+
+func (l *recordingLogger) WarnCount() int {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	return l.warnCount
+}
+
+func (l *recordingLogger) ErrorCount() int {
+	l.mtx.Lock()
+	defer l.mtx.Unlock()
+
+	return l.errorCount
+}
 
 var _ = Describe("Rabbit", func() {
 	var (
@@ -784,7 +844,7 @@ var _ = Describe("Rabbit", func() {
 		})
 
 		When("consumer receives amqp.Delivery with nil acknowledger", func() {
-			It("will send reconnect signal to ReconnectChan + send err to errCh", func() {
+			It("will send reconnect signal to ReconnectChan and NOT write to errCh", func() {
 				// Create our own rabbit instance with mock delivery channel
 				ctx, cancel := context.WithCancel(context.Background())
 
@@ -832,22 +892,121 @@ var _ = Describe("Rabbit", func() {
 					Body:         []byte("foo"),
 				}
 
-				go func() {
-					defer GinkgoRecover()
-
-					consumeErr := <-errCh
-					Expect(consumeErr).ToNot(BeNil())
-					Expect(consumeErr.Error.Error()).To(ContainSubstring("nil acknowledger detected - sending reconnect signal"))
-				}()
-
-				// Give consume error goroutine enough time to start up
-				time.Sleep(time.Second)
-
 				Eventually(reconnectCh).Should(Receive())
 				Eventually(notifyCloseCh).ShouldNot(Receive())
 
+				// Disconnects are no longer written to errCh - they are not
+				// consume errors; reconnect failures are logged by the watcher
+				// (at error level only after ReconnectErrorAfterSec)
+				Consistently(errCh).ShouldNot(Receive())
+
 				// Consume func should NOT be executed (library should treat as error)
 				Eventually(receivedMessage).Should(BeFalse())
+			})
+		})
+
+		When("a reconnect occurs while the existing connection is still alive", func() {
+			It("closes the old connection so it does not leak", func() {
+				oldConn := r.Conn
+
+				// Ask the lib to reconnect even though the current conn is healthy
+				r.ReconnectChan <- struct{}{}
+
+				Eventually(func() bool {
+					r.ConsumerRWMutex.RLock()
+					defer r.ConsumerRWMutex.RUnlock()
+
+					return r.Conn != oldConn
+				}, "10s").Should(BeTrue())
+
+				Expect(oldConn.IsClosed()).To(BeTrue())
+			})
+		})
+
+		When("reconnect attempts keep failing", func() {
+			It("logs warnings first and errors only after ReconnectErrorAfterSec", func() {
+				logger := newRecordingLogger()
+
+				failOpts := generateOptions()
+				failOpts.RetryReconnectSec = 1
+				failOpts.ReconnectErrorAfterSec = 2
+				failOpts.Log = logger
+
+				fr, err := New(failOpts)
+				Expect(err).ToNot(HaveOccurred())
+
+				// fr.Options and failOpts point at the same struct - capture
+				// the working URLs before swapping in the dead one
+				goodURLs := failOpts.URLs
+
+				// Point the lib at a dead server and kill the connection to
+				// force the reconnect loop into failure mode
+				fr.Options.URLs = []string{"amqp://localhost:1"}
+				Expect(fr.Conn.Close()).ToNot(HaveOccurred())
+
+				// Reconnect failures should show up as warnings fairly quickly ...
+				Eventually(logger.WarnCount, "3s", "100ms").Should(BeNumerically(">", 0))
+
+				// ... and only get logged as errors after ReconnectErrorAfterSec
+				Expect(logger.ErrorCount()).To(Equal(0))
+				Eventually(logger.ErrorCount, "6s", "100ms").Should(BeNumerically(">", 0))
+
+				// Restore the URL - the lib should recover on its own
+				fr.Options.URLs = goodURLs
+
+				Eventually(func() bool {
+					fr.ConsumerRWMutex.RLock()
+					defer fr.ConsumerRWMutex.RUnlock()
+
+					return !fr.Conn.IsClosed()
+				}, "10s", "250ms").Should(BeTrue())
+
+				Expect(fr.Close()).ToNot(HaveOccurred())
+			})
+		})
+	})
+
+	Describe("Goroutine leaks", func() {
+		When("Publish fails repeatedly", func() {
+			It("does not leak a goroutine per failed publish", func() {
+				// Prime the producer channel, then close it underneath the
+				// lib so that every subsequent publish fails
+				Expect(r.Publish(nil, opts.Bindings[0].BindingKeys[0], []byte("prime"))).ToNot(HaveOccurred())
+				Expect(r.ProducerServerChannel.Close()).ToNot(HaveOccurred())
+
+				before := runtime.NumGoroutine()
+
+				for i := 0; i < 50; i++ {
+					err := r.Publish(nil, opts.Bindings[0].BindingKeys[0], []byte("data"))
+					Expect(err).To(HaveOccurred())
+				}
+
+				// Give stray goroutines a moment to exit (or block, pre-fix)
+				time.Sleep(100 * time.Millisecond)
+
+				// Pre-fix, every failed publish leaked one goroutine blocked
+				// on an unbuffered done channel
+				Expect(runtime.NumGoroutine() - before).To(BeNumerically("<", 10))
+			})
+		})
+
+		When("errChan is full", func() {
+			It("writeError does not block or spawn a goroutine", func() {
+				errCh := make(chan *ConsumeError, 1)
+				errCh <- &ConsumeError{Error: errors.New("existing")}
+
+				done := make(chan struct{})
+
+				go func() {
+					defer close(done)
+
+					r.writeError(errCh, &ConsumeError{Error: errors.New("dropped")})
+				}()
+
+				// Pre-fix, writeError spawned a goroutine that blocked forever
+				// on the full channel
+				Eventually(done).Should(BeClosed())
+				Expect(errCh).To(HaveLen(1))
 			})
 		})
 	})
