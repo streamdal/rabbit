@@ -27,7 +27,14 @@ import (
 const (
 	// DefaultRetryReconnectSec determines how long to wait before attempting
 	// to reconnect to a rabbit server
-	DefaultRetryReconnectSec = 60
+	DefaultRetryReconnectSec = 5
+
+	// DefaultReconnectErrorAfterSec determines how long reconnect attempts can
+	// keep failing before failures are logged at error level; failures before
+	// that are logged at warn level. This prevents short, routine server
+	// restarts (e.g. weekly maintenance reboots) from tripping error-based
+	// alerting.
+	DefaultReconnectErrorAfterSec = 30
 
 	// DefaultStopTimeout is the default amount of time Stop() will wait for
 	// consume function(s) to exit.
@@ -135,6 +142,11 @@ type Options struct {
 
 	// How long to wait before we retry connecting to a server (after disconnect)
 	RetryReconnectSec int
+
+	// How long reconnect attempts can keep failing before failures are logged
+	// at error level (they are logged at warn level before that); defaults to
+	// DefaultReconnectErrorAfterSec
+	ReconnectErrorAfterSec int
 
 	// Whether queue should survive/persist server restarts (and there are no remaining bindings)
 	QueueDurable bool
@@ -317,6 +329,10 @@ func applyDefaults(opts *Options) {
 		opts.RetryReconnectSec = DefaultRetryReconnectSec
 	}
 
+	if opts.ReconnectErrorAfterSec == 0 {
+		opts.ReconnectErrorAfterSec = DefaultReconnectErrorAfterSec
+	}
+
 	if opts.AppID == "" {
 		opts.AppID = DefaultAppID
 	}
@@ -398,12 +414,22 @@ MAIN:
 		select {
 		case msg := <-r.delivery():
 			if _, ok := msg.Headers[ForceReconnectHeader]; ok || msg.Acknowledger == nil {
-				r.writeError(errChan, &ConsumeError{
-					Message: &msg,
-					Error:   errors.New("nil acknowledger detected - sending reconnect signal"),
-				})
+				// A nil acknowledger means the delivery channel is closed -
+				// the server went away and the watcher will reconnect. This is
+				// intentionally NOT written to errChan - a disconnect is not a
+				// consume error and reconnect failures are logged by the
+				// watcher (at error level only after ReconnectErrorAfterSec).
+				r.log.Warn("nil acknowledger or force-reconnect detected - sending reconnect signal")
 
-				r.ReconnectChan <- struct{}{}
+				select {
+				case r.ReconnectChan <- struct{}{}:
+				default:
+					// Reconnect signal already pending - nothing to do
+				}
+
+				// Brief pause to avoid a tight loop (and log spam) while the
+				// watcher swaps out the closed delivery channel
+				time.Sleep(250 * time.Millisecond)
 
 				// No point in continuing execution of consumer func as the
 				// delivery msg is incomplete/invalid.
@@ -464,15 +490,13 @@ func (r *Rabbit) writeError(errChan chan *ConsumeError, err *ConsumeError) {
 		return
 	}
 
-	// Only write to errChan if it's not full (to avoid goroutine leak)
-	if len(errChan) > 0 {
+	// Non-blocking write - previously this spawned a goroutine per error which
+	// would block forever (ie. leak) if the caller wasn't reading from errChan
+	select {
+	case errChan <- err:
+	default:
 		r.log.Warn("errChan is full - dropping message")
-		return
 	}
-
-	go func() {
-		errChan <- err
-	}()
 }
 
 // ConsumeOnce will consume exactly one message from the configured queue,
@@ -507,7 +531,11 @@ func (r *Rabbit) ConsumeOnce(ctx context.Context, runFunc func(msg amqp.Delivery
 		if msg.Acknowledger == nil {
 			r.log.Warn("Detected nil acknowledger - sending signal to rabbit lib to reconnect")
 
-			r.ReconnectChan <- struct{}{}
+			select {
+			case r.ReconnectChan <- struct{}{}:
+			default:
+				// Reconnect signal already pending - nothing to do
+			}
 
 			return errors.New("detected nil acknowledger - sent signal to reconnect to RabbitMQ")
 		}
@@ -575,9 +603,11 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte, he
 	r.ProducerRWMutex.RLock()
 	defer r.ProducerRWMutex.RUnlock()
 
-	// Create channels for error and done signals
-	chanErr := make(chan error)
-	chanDone := make(chan struct{})
+	// Create channels for error and done signals; both are buffered so the
+	// goroutine below can always exit - unbuffered channels would leak the
+	// goroutine whenever the select below returns via one of the other cases
+	chanErr := make(chan error, 1)
+	chanDone := make(chan struct{}, 1)
 
 	go func() {
 		var realHeaders amqp.Table
@@ -594,6 +624,8 @@ func (r *Rabbit) Publish(ctx context.Context, routingKey string, body []byte, he
 		}); err != nil {
 			// Signal there is an error
 			chanErr <- err
+
+			return
 		}
 
 		// Signal we are done
@@ -671,6 +703,11 @@ func (r *Rabbit) getReconnectInProgress() bool {
 func (r *Rabbit) runWatcher() {
 	for {
 		select {
+		case <-r.ctx.Done():
+			// Client was shutdown via Stop() or Close() - exit watcher so it
+			// does not reconnect (and leak) a connection nobody will use
+			r.log.Debug("runWatcher exiting - client is shutdown")
+			return
 		case closeErr := <-r.NotifyCloseChan:
 			r.log.Debugf("received message on notify close channel: '%+v' (reconnecting)", closeErr)
 		case <-r.ReconnectChan:
@@ -691,41 +728,12 @@ func (r *Rabbit) runWatcher() {
 		r.ConsumerRWMutex.Lock()
 		r.ProducerRWMutex.Lock()
 
-		var attempts int
+		reconnectErr := r.reconnectWithRetry()
 
-		for {
-			attempts++
-			if err := r.reconnect(); err != nil {
-				r.log.Warnf("unable to complete reconnect: %s; retrying in %d", err, r.Options.RetryReconnectSec)
-				time.Sleep(time.Duration(r.Options.RetryReconnectSec) * time.Second)
-				continue
-			}
-
-			r.log.Debugf("successfully reconnected after %d attempts", attempts)
-
-			break
-		}
-
-		// Create and set a new notify close channel (since old one may have gotten shutdown)
-		r.NotifyCloseChan = make(chan *amqp.Error, 0)
-		r.Conn.NotifyClose(r.NotifyCloseChan)
-
-		// Update channel
-		if r.Options.Mode == Producer {
-			serverChannel, err := r.newServerChannel()
-			if err != nil {
-				r.log.Errorf("unable to set new channel: %s", err)
-				panic(fmt.Sprintf("unable to set new channel: %s", err))
-			}
-
-			r.ProducerServerChannel = serverChannel
-		} else {
-			if err := r.newConsumerChannel(); err != nil {
-				r.log.Errorf("unable to set new channel: %s", err)
-
-				// TODO: This is super shitty. Should address this.
-				panic(fmt.Sprintf("unable to set new channel: %s", err))
-			}
+		if reconnectErr == nil {
+			// Create and set a new notify close channel (since old one may have gotten shutdown)
+			r.NotifyCloseChan = make(chan *amqp.Error, 0)
+			r.Conn.NotifyClose(r.NotifyCloseChan)
 		}
 
 		// Unlock so that consumers/producers can begin reading messages from a new channel
@@ -738,8 +746,78 @@ func (r *Rabbit) runWatcher() {
 			r.ReconnectInProgressMtx.Unlock()
 		}
 
+		if reconnectErr != nil {
+			// Only happens on shutdown - exit watcher
+			r.log.Debug("runWatcher exiting - client shutdown during reconnect")
+			return
+		}
+
 		r.log.Debug("runWatcher iteration has completed successfully")
 	}
+}
+
+// reconnectWithRetry attempts to re-establish the connection AND re-create the
+// producer/consumer channel(s), retrying every RetryReconnectSec until it
+// succeeds (or the client is shutdown, in which case ErrShutdown is returned).
+//
+// Failed attempts are logged at warn level until attempts have been failing
+// for longer than ReconnectErrorAfterSec - after that they are logged at
+// error level. This gives the server time to complete short, routine restarts
+// (e.g. maintenance reboots) without tripping error-based alerting.
+func (r *Rabbit) reconnectWithRetry() error {
+	var attempts int
+
+	started := time.Now()
+
+	for {
+		if r.ctx.Err() != nil {
+			return ErrShutdown
+		}
+
+		attempts++
+
+		err := r.reconnect()
+		if err == nil {
+			// Connection re-established - re-create the channel(s) as well; a
+			// failure here likely means the server is not fully ready yet, so
+			// it is treated the same as a failed reconnect attempt and retried
+			// (previously a channel setup failure caused a panic)
+			err = r.newChannels()
+		}
+
+		if err == nil {
+			r.log.Debugf("successfully reconnected after %d attempts", attempts)
+
+			return nil
+		}
+
+		if time.Since(started) >= time.Duration(r.Options.ReconnectErrorAfterSec)*time.Second {
+			r.log.Errorf("unable to reconnect for %v (attempt %d): %s; retrying in %ds",
+				time.Since(started).Round(time.Second), attempts, err, r.Options.RetryReconnectSec)
+		} else {
+			r.log.Warnf("unable to complete reconnect (attempt %d): %s; retrying in %ds",
+				attempts, err, r.Options.RetryReconnectSec)
+		}
+
+		time.Sleep(time.Duration(r.Options.RetryReconnectSec) * time.Second)
+	}
+}
+
+// newChannels re-creates the producer and/or consumer channel(s) after a
+// reconnect (mode determines which ones are needed).
+func (r *Rabbit) newChannels() error {
+	if r.Options.Mode == Producer {
+		serverChannel, err := r.newServerChannel()
+		if err != nil {
+			return errors.Wrap(err, "unable to create new server channel")
+		}
+
+		r.ProducerServerChannel = serverChannel
+
+		return nil
+	}
+
+	return r.newConsumerChannel()
 }
 
 func (r *Rabbit) newServerChannel() (*amqp.Channel, error) {
@@ -832,6 +910,15 @@ func (r *Rabbit) newConsumerChannel() error {
 }
 
 func (r *Rabbit) reconnect() error {
+	// Close the old connection first (if it is still alive) so its goroutines
+	// are released - otherwise every reconnect over a live connection (e.g.
+	// force-reconnect or a channel-level error) leaks the old connection
+	if r.Conn != nil && !r.Conn.IsClosed() {
+		if err := r.Conn.Close(); err != nil {
+			r.log.Warnf("unable to close old connection during reconnect: %s", err)
+		}
+	}
+
 	var ac *amqp.Connection
 	var err error
 
